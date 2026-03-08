@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Backend (whatsapp-web.js session and uploads)
+backend/.wwebjs_auth/
+backend/.wwebjs_cache/
+backend/uploads/
+backend/npm-debug.log*
+
+# Frontend (Vite build and logs)
+frontend/dist/
+frontend/node_modules/
+frontend/npm-debug.log*
+frontend/dist-ssr/
+frontend/*.local
+
+# System/Misc
+.DS_Store
+Thumbs.db
+.env
+.env.*
