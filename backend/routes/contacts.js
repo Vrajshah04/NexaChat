@@ -7,8 +7,11 @@ const Contact = require('../models/Contact')
 const router = express.Router()
 
 // Multer setup for contact attachments
-const uploadsDir = path.join(__dirname, '..', 'uploads')
-try { fs.mkdirSync(uploadsDir, { recursive: true }) } catch (_) { }
+const uploadsDir = path.resolve(__dirname, '..', 'uploads')
+try { if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true }) } catch (_) { }
+
+console.log('[contacts] Uploads directory:', uploadsDir)
+
 const storage = multer.diskStorage({
     destination: (_req, _file, cb) => cb(null, uploadsDir),
     filename: (_req, file, cb) => {
@@ -28,37 +31,17 @@ router.get('/', async (req, res) => {
     }
 })
 
-// POST /api/contacts — add or update a contact
-router.post('/', upload.single('attachment'), async (req, res) => {
-    const { name, number, customMessage, autoReplyEnabled } = req.body || {}
+// POST /api/contacts — add or update a contact (no file upload here anymore)
+router.post('/', async (req, res) => {
+    const { name, number, autoReplyEnabled } = req.body || {}
     if (!name || !number) return res.status(400).json({ ok: false, error: 'Missing name or number' })
     const cleanNumber = String(number).replace(/\D/g, '')
     const chatId = cleanNumber + '@c.us'
     try {
-        const prev = await Contact.findOne({ userId: req.user.userId, chatId })
-        let attachmentPath = prev?.attachmentPath || ''
-        let attachmentMimetype = prev?.attachmentMimetype || ''
-        let attachmentOriginalName = prev?.attachmentOriginalName || ''
-        if (req.file) {
-            if (attachmentPath) { try { await fs.promises.unlink(attachmentPath) } catch (_) { } }
-            attachmentPath = req.file.path
-            attachmentMimetype = req.file.mimetype || ''
-            attachmentOriginalName = req.file.originalname || ''
-        }
         const update = {
             name: String(name).trim(),
             number: cleanNumber,
-            attachmentPath,
-            attachmentMimetype,
-            attachmentOriginalName,
             ...(autoReplyEnabled !== undefined && { autoReplyEnabled: autoReplyEnabled === 'true' || autoReplyEnabled === true }),
-        }
-        // Handle legacy customMessage as a single rule for backwards compatibility
-        if (customMessage !== undefined) {
-            const trimmed = String(customMessage).trim()
-            if (trimmed && !prev) {
-                update.autoReplyRules = [{ trigger: '', reply: trimmed }]
-            }
         }
         const contact = await Contact.findOneAndUpdate(
             { userId: req.user.userId, chatId },
@@ -78,30 +61,48 @@ router.delete('/:number', async (req, res) => {
     const chatId = cleanNumber + '@c.us'
     try {
         const contact = await Contact.findOneAndDelete({ userId: req.user.userId, chatId })
-        if (contact?.attachmentPath) {
-            fs.promises.unlink(contact.attachmentPath).catch(() => { })
-        }
+        // Note: Rule images are separate. We might want to clean them up too, but for now we just delete the contact.
         return res.json({ ok: true, removed: Boolean(contact) })
     } catch (err) {
         return res.status(500).json({ ok: false, error: 'Server error' })
     }
 })
 
-// POST /api/contacts/:number/rules — add an auto-reply rule to a contact
-router.post('/:number/rules', async (req, res) => {
-    const { trigger, reply } = req.body || {}
-    if (!trigger || !reply) return res.status(400).json({ ok: false, error: 'trigger and reply required' })
+// POST /api/contacts/:number/rules — add an auto-reply rule (text, image, or both)
+router.post('/:number/rules', upload.single('image'), async (req, res) => {
+    console.log('[contacts] POST rule - file:', req.file ? req.file.originalname : 'NONE')
+    console.log('[contacts] POST rule - body:', req.body)
+
+    const { trigger, responseText, caption } = req.body || {}
+    if (!trigger) return res.status(400).json({ ok: false, error: 'trigger is required' })
+    const hasImage = Boolean(req.file)
+    const hasText = Boolean(responseText && String(responseText).trim())
+    if (!hasImage && !hasText) return res.status(400).json({ ok: false, error: 'Provide at least a reply message or an image' })
+
     const cleanNumber = String(req.params.number).replace(/\D/g, '')
     const chatId = cleanNumber + '@c.us'
+
+    const rule = {
+        trigger: trigger.trim(),
+        responseType: hasImage ? 'image' : 'text',
+        responseText: hasText ? String(responseText).trim() : '',
+        imagePath: hasImage ? req.file.path : '',
+        imageOriginalName: hasImage ? (req.file.originalname || '') : '',
+        caption: hasImage ? String(caption || '').trim() : '',
+    }
+
+    console.log('[contacts] saving rule:', rule)
+
     try {
         const contact = await Contact.findOneAndUpdate(
             { userId: req.user.userId, chatId },
-            { $push: { autoReplyRules: { trigger: trigger.trim(), reply: reply.trim() } } },
+            { $push: { autoReplyRules: rule } },
             { new: true }
         )
         if (!contact) return res.status(404).json({ ok: false, error: 'Contact not found' })
         return res.json({ ok: true, contact })
     } catch (err) {
+        console.error('[contacts] add rule error', err)
         return res.status(500).json({ ok: false, error: 'Server error' })
     }
 })

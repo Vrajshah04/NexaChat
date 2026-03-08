@@ -1,8 +1,14 @@
 const mongoose = require('mongoose')
 
 const AutoReplyRuleSchema = new mongoose.Schema({
-    trigger: { type: String, required: true },
-    reply: { type: String, required: true },
+    trigger: { type: String, required: true, trim: true },
+    responseType: { type: String, enum: ['text', 'image'], default: 'text' },
+    // Text response
+    responseText: { type: String, default: '' },
+    // Image response
+    imagePath: { type: String, default: '' },   // server-side path to uploaded image
+    imageOriginalName: { type: String, default: '' },
+    caption: { type: String, default: '' },   // optional caption under the image
 })
 
 const ContactSchema = new mongoose.Schema({
@@ -12,9 +18,6 @@ const ContactSchema = new mongoose.Schema({
     number: { type: String, required: true },
     autoReplyEnabled: { type: Boolean, default: true },
     autoReplyRules: [AutoReplyRuleSchema],
-    attachmentPath: { type: String, default: '' },
-    attachmentMimetype: { type: String, default: '' },
-    attachmentOriginalName: { type: String, default: '' },
 }, { timestamps: true })
 
 // One contact record per chatId per user

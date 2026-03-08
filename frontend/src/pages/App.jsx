@@ -19,7 +19,7 @@ export function App() {
   const captionRef = useRef(null)
 
   // Ensure Socket.IO connects to the Express backend (port 3000) even when running a separate frontend dev server
-  const API_BASE = 'http://localhost:3000'
+  const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
   const socket = useMemo(() => io(API_BASE, { autoConnect: true }), [])
 
   useEffect(() => {
@@ -74,7 +74,7 @@ export function App() {
       try {
         const parsed = JSON.parse(stored)
         if (Array.isArray(parsed)) setContacts(parsed)
-      } catch (_) {}
+      } catch (_) { }
     }
     let cancelled = false
     async function loadFromServer() {
@@ -174,11 +174,11 @@ export function App() {
     try {
       // Disconnect to logout and wipe session cache on the server
       await fetch(`${API_BASE}/api/disconnect`, { method: 'POST' })
-    } catch (_) {}
+    } catch (_) { }
     try {
       // Immediately re-init to surface a fresh QR for the next login
       await fetch(`${API_BASE}/api/connect`, { method: 'POST' })
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function handleCloseQrModal() {
@@ -249,14 +249,14 @@ export function App() {
                   const hasMedia = m?.hasMedia
                   const mediaInfo = m?.mediaInfo
                   const who = fromMe ? `me → ${to || ''}` : `${from || ''} → me`
-                  
+
                   return (
                     <React.Fragment key={idx}>
                       <div className={`msg ${fromMe ? 'me' : 'them'}`}>
                         {hasMedia && mediaInfo ? (
                           <div className="media-message">
                             {mediaInfo.mimetype?.startsWith('image/') ? (
-                              <img 
+                              <img
                                 src={`data:${mediaInfo.mimetype};base64,${mediaInfo.data}`}
                                 alt={mediaInfo.filename}
                                 style={{ maxWidth: '200px', maxHeight: '200px', borderRadius: '8px' }}

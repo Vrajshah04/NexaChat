@@ -177,9 +177,19 @@ function attachClientEvents(newClient) {
         // Auto-reply: only for incoming messages
         if (!message.fromMe && state.currentUserId) {
             try {
-                const reply = await getAutoReply(state.currentUserId, message.from, messageBody)
-                if (reply) {
-                    await sendWithRecovery(() => newClient.sendMessage(message.from, reply))
+                const rule = await getAutoReply(state.currentUserId, message.from, messageBody)
+                if (rule) {
+                    // 1. Send text reply if present
+                    if (rule.responseText) {
+                        await sendWithRecovery(() => newClient.sendMessage(message.from, rule.responseText))
+                    }
+                    // 2. Send image if present (with its own caption)
+                    if (rule.responseType === 'image' && rule.imagePath) {
+                        const media = MessageMedia.fromFilePath(rule.imagePath)
+                        await sendWithRecovery(() =>
+                            newClient.sendMessage(message.from, media, { caption: rule.caption || undefined })
+                        )
+                    }
                 }
             } catch (e) {
                 console.error('[wa] auto-reply error', e)

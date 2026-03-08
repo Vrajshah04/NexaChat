@@ -1,6 +1,7 @@
 require('dotenv').config()
 
 const express = require('express')
+const cors = require('cors')
 const http = require('http')
 const path = require('path')
 const multer = require('multer')
@@ -48,19 +49,15 @@ const io = new Server(server, { cors: { origin: '*' } })
 waState.io = io
 
 app.use(express.json())
-
-// CORS
-app.use((req, res, next) => {
-	res.setHeader('Access-Control-Allow-Origin', '*')
-	res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
-	res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-	if (req.method === 'OPTIONS') return res.sendStatus(200)
-	next()
-})
+app.use(cors({ origin: process.env.FRONTEND_URL || '*' }))
 
 // Static frontend (for production; dev uses Vite on port 5173)
 const frontendDir = path.join(__dirname, '..', 'frontend')
 app.use(express.static(frontendDir))
+
+// Static uploads (for rule images/attachments)
+const uploadsPath = path.resolve(__dirname, 'uploads')
+app.use('/uploads', express.static(uploadsPath))
 
 // ── Public routes ──────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes)
