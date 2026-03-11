@@ -6,6 +6,7 @@ const MessageSchema = new mongoose.Schema({
     chatId: { type: String },                  // the other party's chatId
     from: { type: String },
     to: { type: String },
+    senderName: { type: String, default: '' }, // Name of the person who sent the message
     body: { type: String, default: '' },
     fromMe: { type: Boolean, default: false },
     hasMedia: { type: Boolean, default: false },

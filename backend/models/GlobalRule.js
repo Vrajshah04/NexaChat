@@ -3,14 +3,14 @@ const mongoose = require('mongoose')
 const GlobalRuleSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     trigger: { type: String, required: true, trim: true },
-    // responseType auto-detected: image if imagePath exists, else text
-    responseType: { type: String, enum: ['text', 'image'], default: 'text' },
-    // Text response
+    // Text response (optional)
     responseText: { type: String, default: '' },
-    // Image response
-    imagePath: { type: String, default: '' },
-    imageOriginalName: { type: String, default: '' },
-    caption: { type: String, default: '' },
+    // File attachments (0 or more)
+    attachments: [{
+        filePath: { type: String, default: '' },
+        originalName: { type: String, default: '' },
+        mimetype: { type: String, default: '' },
+    }],
     enabled: { type: Boolean, default: true },
 }, { timestamps: true })
 

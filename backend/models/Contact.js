@@ -2,13 +2,14 @@ const mongoose = require('mongoose')
 
 const AutoReplyRuleSchema = new mongoose.Schema({
     trigger: { type: String, required: true, trim: true },
-    responseType: { type: String, enum: ['text', 'image'], default: 'text' },
-    // Text response
+    // Text response (optional)
     responseText: { type: String, default: '' },
-    // Image response
-    imagePath: { type: String, default: '' },   // server-side path to uploaded image
-    imageOriginalName: { type: String, default: '' },
-    caption: { type: String, default: '' },   // optional caption under the image
+    // File attachments (0 or more)
+    attachments: [{
+        filePath: { type: String, default: '' },
+        originalName: { type: String, default: '' },
+        mimetype: { type: String, default: '' },
+    }],
 })
 
 const ContactSchema = new mongoose.Schema({

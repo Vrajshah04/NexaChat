@@ -6,7 +6,7 @@ const GlobalRule = require('../models/GlobalRule')
 
 const router = express.Router()
 
-// Multer setup for global rule images
+// Multer setup for global rule attachments
 const uploadsDir = path.resolve(__dirname, '..', 'uploads')
 try { if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true }) } catch (_) { }
 
@@ -17,7 +17,7 @@ const storage = multer.diskStorage({
         cb(null, 'global-' + Date.now() + '-' + safe)
     }
 })
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } })
+const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 } })
 
 // GET /api/global-rules
 router.get('/', async (req, res) => {
@@ -29,27 +29,32 @@ router.get('/', async (req, res) => {
     }
 })
 
-// POST /api/global-rules — supports text + image
-router.post('/', upload.single('image'), async (req, res) => {
-    const { trigger, responseText, caption } = req.body || {}
+// POST /api/global-rules — supports text + multiple attachments
+router.post('/', upload.any(), async (req, res) => {
+    const { trigger, responseText } = req.body || {}
     if (!trigger) return res.status(400).json({ ok: false, error: 'trigger is required' })
 
-    const hasImage = Boolean(req.file)
+    const hasFiles = Boolean(req.files && req.files.length > 0)
     const hasText = Boolean(responseText && String(responseText).trim())
 
-    if (!hasImage && !hasText) {
-        return res.status(400).json({ ok: false, error: 'Provide at least a reply message or an image' })
+    if (!hasFiles && !hasText) {
+        return res.status(400).json({ ok: false, error: 'Provide at least a reply message or an attachment' })
     }
+
+    const attachments = hasFiles
+        ? req.files.map(f => ({
+            filePath: f.path,
+            originalName: f.originalname || '',
+            mimetype: f.mimetype || 'application/octet-stream',
+        }))
+        : []
 
     try {
         const ruleData = {
             userId: req.user.userId,
             trigger: trigger.trim(),
-            responseType: hasImage ? 'image' : 'text',
             responseText: hasText ? String(responseText).trim() : '',
-            imagePath: hasImage ? req.file.path : '',
-            imageOriginalName: hasImage ? (req.file.originalname || '') : '',
-            caption: hasImage ? String(caption || '').trim() : '',
+            attachments,
         }
         const rule = await GlobalRule.create(ruleData)
         return res.status(201).json({ ok: true, rule })
@@ -59,18 +64,14 @@ router.post('/', upload.single('image'), async (req, res) => {
     }
 })
 
-// PUT /api/global-rules/:id — update rule (file upload not supported in simple PUT yet, mainly for toggle)
+// PUT /api/global-rules/:id — mainly for enable/disable toggle
 router.put('/:id', async (req, res) => {
-    const { trigger, responseText, caption, enabled } = req.body || {}
+    const { trigger, responseText, enabled } = req.body || {}
     try {
         const update = {}
         if (trigger !== undefined) update.trigger = trigger.trim()
         if (responseText !== undefined) update.responseText = responseText.trim()
-        if (caption !== undefined) update.caption = caption.trim()
         if (enabled !== undefined) update.enabled = enabled
-
-        // Note: If both imagePath and responseText become empty, we don't handle it here yet.
-        // Detailed file replacement logic can be added if needed.
 
         const rule = await GlobalRule.findOneAndUpdate(
             { _id: req.params.id, userId: req.user.userId },
@@ -89,9 +90,11 @@ router.delete('/:id', async (req, res) => {
     try {
         const rule = await GlobalRule.findOneAndDelete({ _id: req.params.id, userId: req.user.userId })
         if (!rule) return res.status(404).json({ ok: false, error: 'Rule not found' })
-        // Clean up image file if it exists
-        if (rule.imagePath) {
-            fs.promises.unlink(rule.imagePath).catch(() => { })
+        // Clean up attachment files
+        if (Array.isArray(rule.attachments)) {
+            for (const att of rule.attachments) {
+                if (att.filePath) fs.promises.unlink(att.filePath).catch(() => { })
+            }
         }
         return res.json({ ok: true })
     } catch (err) {

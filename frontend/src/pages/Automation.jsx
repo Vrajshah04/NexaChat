@@ -1,18 +1,66 @@
 import React, { useEffect, useState, useRef } from 'react'
 import { useAuth } from '../context/AuthContext'
+import {
+    Zap,
+    Trash2,
+    Key,
+    MessageSquare,
+    Image as ImageIcon,
+    Plus,
+    Power,
+    Loader2,
+    Paperclip,
+    X,
+    FileText,
+    Film,
+    File,
+    Hash
+} from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+
+function AttachmentIcon({ mimetype, size = 14 }) {
+    if (!mimetype) return <File size={size} />
+    if (mimetype.startsWith('image/')) return <ImageIcon size={size} />
+    if (mimetype.startsWith('video/')) return <Film size={size} />
+    if (mimetype.startsWith('text/')) return <FileText size={size} />
+    return <File size={size} />
+}
+
+function formatSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function AttachmentChip({ att }) {
+    return (
+        <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '3px 10px', borderRadius: 20,
+            background: 'rgba(16, 185, 129, 0.1)',
+            border: '1px solid rgba(16, 185, 129, 0.2)',
+            fontSize: 12, color: 'var(--accent)', fontWeight: 500,
+            maxWidth: 200,
+        }}>
+            <AttachmentIcon mimetype={att.mimetype} size={12} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {att.originalName || 'Attachment'}
+            </span>
+        </div>
+    )
+}
 
 export function Automation() {
     const { token } = useAuth()
     const [rules, setRules] = useState([])
     const [isLoading, setIsLoading] = useState(true)
 
-    // Form state
     const [trigger, setTrigger] = useState('')
     const [responseText, setResponseText] = useState('')
-    const [caption, setCaption] = useState('')
-    const imageRef = useRef(null)
+    const [attachments, setAttachments] = useState([])
+    const fileInputRef = useRef(null)
 
     const authFetch = (url, opts = {}) => fetch(`${API_BASE}${url}`, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${token}` } })
 
@@ -27,34 +75,35 @@ export function Automation() {
         } catch (_) { } finally { setIsLoading(false) }
     }
 
+    function handleFileChange(e) {
+        const newFiles = Array.from(e.target.files || [])
+        setAttachments(prev => [...prev, ...newFiles])
+        e.target.value = ''
+    }
+
+    function removeAttachment(idx) {
+        setAttachments(prev => prev.filter((_, i) => i !== idx))
+    }
+
     async function handleAdd(e) {
         e.preventDefault()
         if (!trigger.trim()) return
-        if (!responseText.trim() && !imageRef.current?.files?.[0]) {
-            alert('Provide at least a reply message or an image')
+        if (!responseText.trim() && attachments.length === 0) {
+            alert('Provide at least a reply message or an attachment')
             return
         }
-
         const form = new FormData()
         form.append('trigger', trigger.trim())
         if (responseText.trim()) form.append('responseText', responseText.trim())
-        if (imageRef.current?.files?.[0]) {
-            form.append('image', imageRef.current.files[0])
-            if (caption.trim()) form.append('caption', caption.trim())
-        }
-
+        for (const file of attachments) form.append('attachments', file)
         try {
-            const res = await authFetch('/api/global-rules', {
-                method: 'POST',
-                body: form // fetch handles multipart boundary automatically
-            })
+            const res = await authFetch('/api/global-rules', { method: 'POST', body: form })
             const data = await res.json()
             if (!data.ok) { alert(data.error || 'Failed'); return }
             setRules(prev => [data.rule, ...prev])
             setTrigger('')
             setResponseText('')
-            setCaption('')
-            if (imageRef.current) imageRef.current.value = ''
+            setAttachments([])
         } catch { alert('Network error') }
     }
 
@@ -78,89 +127,218 @@ export function Automation() {
         } catch { alert('Network error') }
     }
 
-    const inp = { padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, width: '100%', boxSizing: 'border-box' }
-
     return (
-        <section className="contact-page">
-            <h3 style={{ marginTop: 0 }}>Global Automation Rules</h3>
-            <p className="meta" style={{ marginBottom: 20 }}>These rules apply to <strong style={{ color: 'var(--text)' }}>all contacts</strong>. Contact-specific rules (set on the Contacts page) take priority over these.</p>
-
-            {/* Add rule form */}
-            <form onSubmit={handleAdd} style={{ background: 'rgba(34,197,94,0.05)', border: '1px dashed rgba(34,197,94,0.3)', borderRadius: 10, padding: 20, marginBottom: 24 }}>
-                <div style={{ fontSize: 14, color: 'var(--accent)', fontWeight: 600, marginBottom: 12 }}>+ Add Global Rule</div>
-
-                <div style={{ marginBottom: 10 }}>
-                    <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>TRIGGER KEYWORD *</label>
-                    <input value={trigger} onChange={e => setTrigger(e.target.value)} placeholder='e.g. "price"' required style={inp} />
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 0 }}>
+            {/* Page header */}
+            <div style={{ marginBottom: 28, flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: 'var(--accent)', marginBottom: 6 }}>
+                    <Zap size={20} fill="currentColor" />
+                    <span style={{ fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', fontSize: 12 }}>Automation Engine</span>
                 </div>
+                <h1 style={{ margin: '0 0 6px 0', fontSize: 30 }}>Global Rules</h1>
+                <p style={{ color: 'var(--text-muted)', fontSize: 14, lineHeight: 1.5, margin: 0 }}>
+                    Apply to <strong style={{ color: 'var(--text)' }}>all incoming messages</strong>. Contact-specific rules take priority.
+                </p>
+            </div>
 
-                <div style={{ marginBottom: 10 }}>
-                    <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>REPLY MESSAGE (optional)</label>
-                    <input value={responseText} onChange={e => setResponseText(e.target.value)} placeholder='e.g. "Our price is ₹999"' style={inp} />
-                </div>
+            {/* Two-column layout */}
+            <div style={{ display: 'flex', gap: 24, flex: 1, minHeight: 0 }}>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
-                    <div>
-                        <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>IMAGE (optional)</label>
-                        <input ref={imageRef} type="file" accept="image/*" style={{ ...inp, padding: '6px 10px' }} />
-                    </div>
-                    <div>
-                        <label style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>IMAGE CAPTION (optional)</label>
-                        <input value={caption} onChange={e => setCaption(e.target.value)} placeholder='e.g. "Pricing chart"' style={inp} />
-                    </div>
-                </div>
-
-                <button type="submit" style={{ padding: '10px 24px', borderRadius: 8, background: 'var(--accent)', color: '#052e16', fontWeight: 600, border: 'none', cursor: 'pointer', fontSize: 14 }}>
-                    Save Global Rule
-                </button>
-            </form>
-
-            {isLoading && <div className="meta">Loading rules…</div>}
-            {!isLoading && rules.length === 0 && <div className="meta">No global rules yet. Add your first rule above.</div>}
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {rules.map(r => (
-                    <div key={r._id} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, auto) 1fr auto auto', gap: 16, alignItems: 'start', padding: '16px', background: 'var(--bg)', border: `1px solid ${r.enabled ? 'var(--border)' : 'transparent'}`, borderRadius: 14, opacity: r.enabled ? 1 : 0.6 }}>
-                        {/* Trigger */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <span style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase' }}>Trigger</span>
-                            <div style={{ padding: '6px 12px', background: 'rgba(34,197,94,0.12)', borderRadius: 8, fontSize: 13, color: 'var(--accent)', fontWeight: 500, whiteSpace: 'nowrap' }}>🔑 {r.trigger}</div>
+                {/* LEFT — Add rule form (sticky) */}
+                <div style={{ width: 460, flexShrink: 0, display: 'flex', flexDirection: 'column', paddingTop: 38, overflow: 'hidden' }}>
+                    <motion.form
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        onSubmit={handleAdd}
+                        className="glass"
+                        style={{
+                            padding: 24,
+                            borderRadius: 'var(--radius-xl)',
+                            border: '1px solid rgba(16, 185, 129, 0.2)',
+                            background: 'var(--accent-light)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 18,
+                        }}
+                    >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                            <div style={{ width: 30, height: 30, borderRadius: 9, background: 'var(--accent)', color: '#052e16', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                                <Plus size={18} />
+                            </div>
+                            <span style={{ fontSize: 16, fontWeight: 700 }}>Add Global Rule</span>
                         </div>
 
-                        {/* Response */}
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                            <span style={{ fontSize: 11, color: 'var(--muted)', textTransform: 'uppercase' }}>Response</span>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                {r.responseText && (
-                                    <div style={{ fontSize: 14, color: 'var(--text)' }}>
-                                        <span style={{ fontSize: 10, color: 'var(--muted)', marginRight: 6 }}>💬</span>
-                                        {r.responseText}
-                                    </div>
-                                )}
-                                {r.imagePath && (
-                                    <div style={{ fontSize: 13, color: 'var(--text)', background: 'var(--panel)', padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                                        <span style={{ fontSize: 10, color: 'var(--muted)', marginRight: 6 }}>🖼 IMAGE:</span>
-                                        <span style={{ fontWeight: 500 }}>{r.imageOriginalName || 'Uploaded Image'}</span>
-                                        {r.caption && <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 2, fontStyle: 'italic' }}>Caption: {r.caption}</div>}
-                                    </div>
-                                )}
+                        {/* Trigger */}
+                        <div>
+                            <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>Trigger Keyword</label>
+                            <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: 11, padding: '0 12px', border: '1px solid rgba(16, 185, 129, 0.12)' }}>
+                                <Key size={15} color="var(--accent)" />
+                                <input value={trigger} onChange={e => setTrigger(e.target.value)} placeholder='e.g. "pricing"' required
+                                    style={{ width: '100%', background: 'transparent', border: 'none', padding: '11px 10px', color: 'var(--text)', fontSize: 14 }} />
                             </div>
                         </div>
 
-                        {/* Actions */}
-                        <div style={{ marginTop: 20 }}>
-                            <button onClick={() => handleToggle(r._id, r.enabled)}
-                                style={{ padding: '8px 16px', borderRadius: 8, border: '1px solid var(--border)', background: 'transparent', color: r.enabled ? 'var(--accent)' : 'var(--muted)', cursor: 'pointer', fontSize: 12, fontWeight: 500, minWidth: 80 }}>
-                                {r.enabled ? 'Enabled' : 'Disabled'}
+                        {/* Reply message */}
+                        <div>
+                            <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>Reply Message</label>
+                            <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.04)', borderRadius: 11, padding: '0 12px', border: '1px solid rgba(16, 185, 129, 0.12)' }}>
+                                <MessageSquare size={15} color="var(--accent)" />
+                                <input value={responseText} onChange={e => setResponseText(e.target.value)} placeholder='e.g. "Our plans start at..."'
+                                    style={{ width: '100%', background: 'transparent', border: 'none', padding: '11px 10px', color: 'var(--text)', fontSize: 14 }} />
+                            </div>
+                        </div>
+
+                        {/* Attachments */}
+                        <div>
+                            <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 8 }}>Attachments</label>
+                            <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleFileChange} />
+                            <button type="button" onClick={() => fileInputRef.current?.click()}
+                                style={{
+                                    width: '100%', padding: '11px',
+                                    borderRadius: 11, border: '2px dashed rgba(16, 185, 129, 0.3)',
+                                    background: 'rgba(16, 185, 129, 0.03)', color: 'var(--text-muted)',
+                                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                                    fontSize: 13, transition: 'all 0.2s',
+                                    marginBottom: attachments.length > 0 ? 10 : 0,
+                                }}
+                                onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(16,185,129,0.6)'; e.currentTarget.style.color = 'var(--accent)' }}
+                                onMouseLeave={e => { e.currentTarget.style.borderColor = 'rgba(16,185,129,0.3)'; e.currentTarget.style.color = 'var(--text-muted)' }}
+                            >
+                                <Paperclip size={15} />
+                                <span>{attachments.length > 0 ? 'Add more files' : 'Click to attach files'}</span>
                             </button>
+                            <AnimatePresence>
+                                {attachments.length > 0 && (
+                                    <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+                                        style={{ display: 'flex', flexDirection: 'column', gap: 6, overflow: 'hidden' }}>
+                                        {attachments.map((file, idx) => (
+                                            <motion.div key={idx} initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}
+                                                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 9, background: 'rgba(16,185,129,0.07)', border: '1px solid rgba(16,185,129,0.15)' }}>
+                                                <div style={{ width: 28, height: 28, borderRadius: 7, background: 'rgba(16,185,129,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent)', flexShrink: 0 }}>
+                                                    <AttachmentIcon mimetype={file.type} size={13} />
+                                                </div>
+                                                <div style={{ flex: 1, minWidth: 0 }}>
+                                                    <div style={{ fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{file.name}</div>
+                                                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{formatSize(file.size)}</div>
+                                                </div>
+                                                <button type="button" onClick={() => removeAttachment(idx)}
+                                                    style={{ background: 'rgba(239,68,68,0.1)', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '3px 6px', borderRadius: 5, display: 'flex', alignItems: 'center' }}>
+                                                    <X size={12} />
+                                                </button>
+                                            </motion.div>
+                                        ))}
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
                         </div>
-                        <div style={{ marginTop: 20 }}>
-                            <button onClick={() => handleDelete(r._id)}
-                                style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--danger)', background: 'transparent', color: 'var(--danger)', cursor: 'pointer', fontSize: 12 }}>✕</button>
-                        </div>
+
+                        <button type="submit"
+                            style={{ padding: '13px', background: 'var(--accent)', color: '#052e16', border: 'none', borderRadius: 11, fontWeight: 700, cursor: 'pointer', fontSize: 14, boxShadow: '0 4px 16px rgba(16,185,129,0.25)' }}>
+                            Activate Global Rule
+                        </button>
+                    </motion.form>
+                </div>
+
+                {/* RIGHT — Rules list */}
+                <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Active Rules</span>
+                        <span style={{ fontSize: 12, background: 'var(--accent-light)', color: 'var(--accent)', padding: '3px 10px', borderRadius: 99, fontWeight: 600 }}>{rules.length} total</span>
                     </div>
-                ))}
+
+                    {isLoading ? (
+                        <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
+                            <Loader2 className="animate-spin" size={28} color="var(--accent)" />
+                        </div>
+                    ) : rules.length === 0 ? (
+                        <div className="glass" style={{ textAlign: 'center', padding: 48, borderRadius: 'var(--radius-xl)', color: 'var(--text-muted)', border: '1px dashed var(--border)' }}>
+                            <Zap size={36} strokeWidth={1} style={{ marginBottom: 10, opacity: 0.3 }} />
+                            <p style={{ margin: 0, fontSize: 14 }}>No rules yet. Add one to start automating.</p>
+                        </div>
+                    ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                            <AnimatePresence>
+                                {rules.map((r, idx) => (
+                                    <GlobalRuleCard key={r._id} rule={r} idx={idx}
+                                        onToggle={() => handleToggle(r._id, r.enabled)}
+                                        onDelete={() => handleDelete(r._id)} />
+                                ))}
+                            </AnimatePresence>
+                        </div>
+                    )}
+                </div>
             </div>
-        </section>
+        </div>
+    )
+}
+
+function GlobalRuleCard({ rule, idx, onToggle, onDelete }) {
+    const atts = Array.isArray(rule.attachments) ? rule.attachments : []
+    return (
+        <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.96 }}
+            transition={{ delay: idx * 0.04 }}
+            className="glass"
+            style={{
+                borderRadius: 'var(--radius-lg)',
+                opacity: rule.enabled ? 1 : 0.55,
+                border: rule.enabled ? '1px solid var(--border)' : '1px solid transparent',
+                transition: 'all 0.3s ease',
+                overflow: 'hidden',
+            }}
+        >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '16px 20px' }}>
+                {/* Trigger */}
+                <div style={{
+                    flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
+                    background: rule.enabled ? 'var(--accent-light)' : 'rgba(255,255,255,0.04)',
+                    padding: '6px 14px', borderRadius: 99,
+                    color: rule.enabled ? 'var(--accent)' : 'var(--text-muted)',
+                    fontWeight: 700, fontSize: 13,
+                    border: `1px solid ${rule.enabled ? 'rgba(16,185,129,0.2)' : 'var(--border)'}`,
+                }}>
+                    <Hash size={12} />
+                    {rule.trigger}
+                    {!rule.enabled && <span style={{ fontSize: 9, fontWeight: 700, background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 4, textTransform: 'uppercase', marginLeft: 4 }}>off</span>}
+                </div>
+
+                {/* Response */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    {rule.responseText && (
+                        <div style={{ fontSize: 13, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+                            <MessageSquare size={12} style={{ flexShrink: 0 }} />
+                            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{rule.responseText}</span>
+                        </div>
+                    )}
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                    <button onClick={onToggle} className="nav-item glass"
+                        style={{
+                            padding: '6px 14px', borderRadius: 8, fontSize: 12,
+                            background: rule.enabled ? 'var(--accent-light)' : 'rgba(255,255,255,0.02)',
+                            color: rule.enabled ? 'var(--accent)' : 'var(--text-muted)',
+                        }}>
+                        <Power size={13} />
+                        <span>{rule.enabled ? 'On' : 'Off'}</span>
+                    </button>
+                    <button onClick={onDelete}
+                        style={{ width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--danger)', opacity: 0.6 }}>
+                        <Trash2 size={14} />
+                    </button>
+                </div>
+            </div>
+
+            {/* Attachment chips */}
+            {atts.length > 0 && (
+                <div style={{ padding: '0 20px 14px', display: 'flex', flexWrap: 'wrap', gap: 6, borderTop: '1px solid var(--border)' }}>
+                    <div style={{ width: '100%', fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', paddingTop: 10, marginBottom: 4 }}>Attachments</div>
+                    {atts.map((att, i) => <AttachmentChip key={i} att={att} />)}
+                </div>
+            )}
+        </motion.div>
     )
 }

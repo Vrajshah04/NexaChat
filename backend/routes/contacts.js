@@ -19,7 +19,7 @@ const storage = multer.diskStorage({
         cb(null, Date.now() + '-' + safe)
     }
 })
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } })
+const upload = multer({ storage, limits: { fileSize: 25 * 1024 * 1024 } })
 
 // GET /api/contacts
 router.get('/', async (req, res) => {
@@ -31,7 +31,7 @@ router.get('/', async (req, res) => {
     }
 })
 
-// POST /api/contacts — add or update a contact (no file upload here anymore)
+// POST /api/contacts — add or update a contact (no file upload here)
 router.post('/', async (req, res) => {
     const { name, number, autoReplyEnabled } = req.body || {}
     if (!name || !number) return res.status(400).json({ ok: false, error: 'Missing name or number' })
@@ -61,34 +61,38 @@ router.delete('/:number', async (req, res) => {
     const chatId = cleanNumber + '@c.us'
     try {
         const contact = await Contact.findOneAndDelete({ userId: req.user.userId, chatId })
-        // Note: Rule images are separate. We might want to clean them up too, but for now we just delete the contact.
         return res.json({ ok: true, removed: Boolean(contact) })
     } catch (err) {
         return res.status(500).json({ ok: false, error: 'Server error' })
     }
 })
 
-// POST /api/contacts/:number/rules — add an auto-reply rule (text, image, or both)
-router.post('/:number/rules', upload.single('image'), async (req, res) => {
-    console.log('[contacts] POST rule - file:', req.file ? req.file.originalname : 'NONE')
+// POST /api/contacts/:number/rules — add an auto-reply rule (text, attachments, or both)
+router.post('/:number/rules', upload.any(), async (req, res) => {
+    console.log('[contacts] POST rule - files:', req.files?.length ?? 0)
     console.log('[contacts] POST rule - body:', req.body)
 
-    const { trigger, responseText, caption } = req.body || {}
+    const { trigger, responseText } = req.body || {}
     if (!trigger) return res.status(400).json({ ok: false, error: 'trigger is required' })
-    const hasImage = Boolean(req.file)
+    const hasFiles = Boolean(req.files && req.files.length > 0)
     const hasText = Boolean(responseText && String(responseText).trim())
-    if (!hasImage && !hasText) return res.status(400).json({ ok: false, error: 'Provide at least a reply message or an image' })
+    if (!hasFiles && !hasText) return res.status(400).json({ ok: false, error: 'Provide at least a reply message or an attachment' })
 
     const cleanNumber = String(req.params.number).replace(/\D/g, '')
     const chatId = cleanNumber + '@c.us'
 
+    const attachments = hasFiles
+        ? req.files.map(f => ({
+            filePath: f.path,
+            originalName: f.originalname || '',
+            mimetype: f.mimetype || 'application/octet-stream',
+        }))
+        : []
+
     const rule = {
         trigger: trigger.trim(),
-        responseType: hasImage ? 'image' : 'text',
         responseText: hasText ? String(responseText).trim() : '',
-        imagePath: hasImage ? req.file.path : '',
-        imageOriginalName: hasImage ? (req.file.originalname || '') : '',
-        caption: hasImage ? String(caption || '').trim() : '',
+        attachments,
     }
 
     console.log('[contacts] saving rule:', rule)
@@ -112,6 +116,16 @@ router.delete('/:number/rules/:ruleId', async (req, res) => {
     const cleanNumber = String(req.params.number).replace(/\D/g, '')
     const chatId = cleanNumber + '@c.us'
     try {
+        // Find the contact first to clean up attachment files
+        const contactBefore = await Contact.findOne({ userId: req.user.userId, chatId }).lean()
+        if (contactBefore) {
+            const ruleToDelete = (contactBefore.autoReplyRules || []).find(r => String(r._id) === req.params.ruleId)
+            if (ruleToDelete && Array.isArray(ruleToDelete.attachments)) {
+                for (const att of ruleToDelete.attachments) {
+                    if (att.filePath) fs.promises.unlink(att.filePath).catch(() => { })
+                }
+            }
+        }
         const contact = await Contact.findOneAndUpdate(
             { userId: req.user.userId, chatId },
             { $pull: { autoReplyRules: { _id: req.params.ruleId } } },

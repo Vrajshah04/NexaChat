@@ -122,30 +122,46 @@ const sendStorage = multer.diskStorage({
 		cb(null, Date.now() + '-' + safe)
 	}
 })
-const upload = multer({ storage: sendStorage, limits: { fileSize: 10 * 1024 * 1024 } })
+const upload = multer({ storage: sendStorage, limits: { fileSize: 25 * 1024 * 1024 } })
 
-app.post('/api/send', authMiddleware, upload.single('attachment'), async (req, res) => {
+app.post('/api/send', authMiddleware, upload.any(), async (req, res) => {
 	if (!waState.isClientReady || !waState.client) {
 		return res.status(503).json({ ok: false, error: 'WhatsApp client not ready' })
 	}
 	const { number } = req.body || {}
-	const message = typeof req.body?.message === 'string' ? req.body.message : ''
-	const caption = typeof req.body?.caption === 'string' ? req.body.caption : ''
+	const message = typeof req.body?.message === 'string' ? req.body.message.trim() : ''
 	if (!number) return res.status(400).json({ ok: false, error: 'Missing number' })
 	const chatId = normalizeToChatId(number)
-	const hasFile = Boolean(req.file && req.file.path)
-	if (!hasFile && !message) return res.status(400).json({ ok: false, error: 'Provide message or attachment' })
+	const files = Array.isArray(req.files) ? req.files : []
+	const hasFiles = files.length > 0
+	if (!hasFiles && !message) return res.status(400).json({ ok: false, error: 'Provide message or attachment' })
 	try {
-		if (hasFile) {
-			const media = MessageMedia.fromFilePath(req.file.path)
-			await sendWithRecovery(() => waState.client.sendMessage(chatId, media, { caption: caption || undefined }))
-			try { await fs.promises.unlink(req.file.path) } catch (_) { }
+		const isSingleImage =
+			files.length === 1 &&
+			(files[0].mimetype || '').startsWith('image/')
+
+		if (isSingleImage) {
+			// Single image: send as image with message as caption
+			const media = MessageMedia.fromFilePath(files[0].path)
+			await sendWithRecovery(() =>
+				waState.client.sendMessage(chatId, media, { caption: message || undefined })
+			)
+			fs.promises.unlink(files[0].path).catch(() => { })
+		} else {
+			// Text first (if any)
 			if (message) {
-				await new Promise(r => setTimeout(r, 250))
 				await sendWithRecovery(() => waState.client.sendMessage(chatId, message))
 			}
-		} else {
-			await sendWithRecovery(() => waState.client.sendMessage(chatId, message))
+			// Each file as separate media, no caption
+			for (const file of files) {
+				if (!file.path) continue
+				const media = MessageMedia.fromFilePath(file.path)
+				await sendWithRecovery(() => waState.client.sendMessage(chatId, media))
+				fs.promises.unlink(file.path).catch(() => { })
+				if (files.indexOf(file) < files.length - 1) {
+					await new Promise(r => setTimeout(r, 300))
+				}
+			}
 		}
 		return res.json({ ok: true })
 	} catch (err) {

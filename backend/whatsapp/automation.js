@@ -6,8 +6,7 @@ const GlobalRule = require('../models/GlobalRule')
  * Priority: contact-specific rules → global rules → null (silence)
  *
  * Returns a rule-like object so the caller knows HOW to respond:
- *   { responseType: 'text', responseText: '...' }
- *   { responseType: 'image', imagePath: '...', caption: '...' }
+ *   { responseText: '...', attachments: [] }
  *   null  ← no match, stay silent
  */
 async function getAutoReply(userId, chatId, body) {
@@ -21,10 +20,8 @@ async function getAutoReply(userId, chatId, body) {
             if (!rule.trigger) continue
             if (lowerBody.includes(rule.trigger.toLowerCase())) {
                 return {
-                    responseType: rule.responseType || 'text',
                     responseText: rule.responseText || '',
-                    imagePath: rule.imagePath || '',
-                    caption: rule.caption || '',
+                    attachments: Array.isArray(rule.attachments) ? rule.attachments : [],
                 }
             }
         }
@@ -36,10 +33,8 @@ async function getAutoReply(userId, chatId, body) {
         if (!rule.trigger) continue
         if (lowerBody.includes(rule.trigger.toLowerCase())) {
             return {
-                responseType: rule.responseType || 'text',
                 responseText: rule.responseText || '',
-                imagePath: rule.imagePath || '',
-                caption: rule.caption || '',
+                attachments: Array.isArray(rule.attachments) ? rule.attachments : [],
             }
         }
     }

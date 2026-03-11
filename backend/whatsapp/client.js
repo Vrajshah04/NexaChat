@@ -3,6 +3,7 @@ const fs = require('fs')
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js')
 const qrcode = require('qrcode')
 const Message = require('../models/Message')
+const Contact = require('../models/Contact') // Added for sender name lookup
 const { getAutoReply } = require('./automation')
 
 // Shared state — exported so server.js and routes can read them
@@ -137,10 +138,38 @@ function attachClientEvents(newClient) {
             }
         }
 
+        // Resolve partner name: our DB first, then raw number (no WA contact fallback)
+        const partnerId = message.fromMe ? message.to : message.from
+        let resolvedPartnerName = ''
+
+        try {
+            // Tier 1: Look in our DB contacts (the only source of truth for names)
+            if (state.currentUserId && partnerId) {
+                const dbContact = await Contact.findOne({ userId: state.currentUserId, chatId: partnerId })
+                if (dbContact) resolvedPartnerName = dbContact.name
+            }
+
+            // Tier 2: Group chats only — get group name from WA
+            if (!resolvedPartnerName && partnerId) {
+                const chat = await message.getChat().catch(() => null)
+                if (chat?.isGroup) {
+                    resolvedPartnerName = chat.name || chat.id?.user || 'Group'
+                }
+            }
+        } catch (err) {
+            console.error('[wa] partner resolution error', err)
+        }
+
+        // Final fallback: raw phone number (strip @c.us)
+        if (!resolvedPartnerName && partnerId) {
+            resolvedPartnerName = partnerId.split('@')[0]
+        }
+
         const record = {
             id: message.id?._serialized || String(Date.now()),
             from: message.from,
             to: message.to,
+            senderName: resolvedPartnerName || 'Contact',
             body: messageBody,
             fromMe: Boolean(message.fromMe),
             timestamp: Date.now(),
@@ -161,6 +190,7 @@ function attachClientEvents(newClient) {
                     chatId: message.fromMe ? message.to : message.from,
                     from: message.from,
                     to: message.to,
+                    senderName: resolvedPartnerName,
                     body: messageBody,
                     fromMe: Boolean(message.fromMe),
                     hasMedia: Boolean(message.hasMedia),
@@ -179,22 +209,37 @@ function attachClientEvents(newClient) {
             try {
                 const rule = await getAutoReply(state.currentUserId, message.from, messageBody)
                 if (rule) {
-                    // 1. Send text reply if present
-                    if (rule.responseText) {
-                        await sendWithRecovery(() => newClient.sendMessage(message.from, rule.responseText))
-                    }
-                    // 2. Send image if present (with its own caption)
-                    if (rule.responseType === 'image' && rule.imagePath) {
-                        const media = MessageMedia.fromFilePath(rule.imagePath)
+                    const attachments = Array.isArray(rule.attachments) ? rule.attachments : []
+                    const isSingleImage =
+                        attachments.length === 1 &&
+                        (attachments[0].mimetype || '').startsWith('image/')
+
+                    if (isSingleImage) {
+                        // Single image: use responseText as caption (send in one message)
+                        const media = MessageMedia.fromFilePath(attachments[0].filePath)
                         await sendWithRecovery(() =>
-                            newClient.sendMessage(message.from, media, { caption: rule.caption || undefined })
+                            newClient.sendMessage(message.from, media, {
+                                caption: rule.responseText || undefined
+                            })
                         )
+                    } else {
+                        // Text first (if any)
+                        if (rule.responseText) {
+                            await sendWithRecovery(() => newClient.sendMessage(message.from, rule.responseText))
+                        }
+                        // Then each attachment as a separate media message, no caption
+                        for (const att of attachments) {
+                            if (!att.filePath) continue
+                            const media = MessageMedia.fromFilePath(att.filePath)
+                            await sendWithRecovery(() => newClient.sendMessage(message.from, media))
+                        }
                     }
                 }
             } catch (e) {
                 console.error('[wa] auto-reply error', e)
             }
         }
+
     })
 }
 
