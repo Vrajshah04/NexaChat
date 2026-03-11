@@ -4,7 +4,6 @@ node_modules/
 # Backend (whatsapp-web.js session and uploads)
 backend/.wwebjs_auth/
 backend/.wwebjs_cache/
-backend/uploads/
 backend/npm-debug.log*
 
 # Frontend (Vite build and logs)
