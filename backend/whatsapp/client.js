@@ -3,27 +3,35 @@ const fs = require('fs')
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js')
 const qrcode = require('qrcode')
 const Message = require('../models/Message')
-const Contact = require('../models/Contact') // Added for sender name lookup
+const Contact = require('../models/Contact')
 const { getAutoReply } = require('./automation')
 
-// Shared state — exported so server.js and routes can read them
-const state = {
-    client: null,
-    isClientReady: false,
-    isInitializing: false,
-    lastQrDataUrl: null,
-    currentAccountId: null,   // WA phone number of logged-in account
-    currentUserId: null,      // DB userId of the dashboard user who connected WA
-    io: null,                 // Socket.IO server instance — injected after init
+// ── Per-user session store ───────────────────────────────────────────────────
+// Map<userId (string), UserState>
+const sessions = new Map()
+
+// Global io reference — injected from server.js
+let _io = null
+function setIO(io) { _io = io }
+
+function emitToUser(userId, event, data) {
+    if (_io) _io.to(`user:${userId}`).emit(event, data)
 }
 
-function getAuthDir() {
-    return path.join(process.cwd(), '.wwebjs_auth')
+function getSession(userId) {
+    if (!sessions.has(userId)) {
+        sessions.set(userId, {
+            client: null,
+            isClientReady: false,
+            isInitializing: false,
+            lastQrDataUrl: null,
+            currentAccountId: null,
+        })
+    }
+    return sessions.get(userId)
 }
 
-function broadcastStatus() {
-    if (state.io) state.io.emit('wa:status', { isReady: state.isClientReady })
-}
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function normalizeToChatId(numberOrChatId) {
     if (!numberOrChatId) return ''
@@ -31,7 +39,10 @@ function normalizeToChatId(numberOrChatId) {
     return value.endsWith('@c.us') ? value : `${value.replace(/\D/g, '')}@c.us`
 }
 
-// Detached frame / dead session detection
+function getSessionDir(userId) {
+    return path.join(process.cwd(), '.wwebjs_auth', `session-${userId}`)
+}
+
 function isDetachedFrameError(err) {
     if (!err) return false
     const msg = String(err.message || err).toLowerCase()
@@ -44,123 +55,134 @@ function isDetachedFrameError(err) {
     )
 }
 
-async function sendWithRecovery(fn) {
+async function sendWithRecovery(fn, userId) {
     try {
         return await fn()
     } catch (err) {
         if (isDetachedFrameError(err)) {
-            console.warn('[wa] detached frame — triggering reconnect')
-            if (state.io) state.io.emit('wa:error', { message: 'WhatsApp session lost, reconnecting…' })
-            state.isClientReady = false
-            broadcastStatus()
-                ; (async () => {
-                    try { await destroyClientAndWipeSession(); await createClient(); safeInitialize() } catch (_) { }
-                })()
+            console.warn(`[wa:${userId}] detached frame — triggering reconnect`)
+            emitToUser(userId, 'wa:error', { message: 'WhatsApp session lost, reconnecting…' })
+            const s = getSession(userId)
+            s.isClientReady = false
+            emitToUser(userId, 'wa:status', { isReady: false });
+            (async () => {
+                try {
+                    await destroyClientAndWipeSession(userId)
+                    await createClient(userId)
+                    safeInitialize(userId)
+                } catch (_) { }
+            })()
             throw new Error('WhatsApp session lost — reconnecting, please try again in ~10 seconds')
         }
         throw err
     }
 }
 
-function attachClientEvents(newClient) {
+// ── Client lifecycle ─────────────────────────────────────────────────────────
+
+function attachClientEvents(newClient, userId) {
+    const s = getSession(userId)
+
     newClient.on('qr', async qr => {
-        console.log('[wa] qr received')
+        console.log(`[wa:${userId}] qr received`)
         try {
-            state.lastQrDataUrl = await qrcode.toDataURL(qr, { width: 256 })
-            if (state.io) state.io.emit('wa:qr', { dataUrl: state.lastQrDataUrl })
-            state.isClientReady = false
-            broadcastStatus()
+            s.lastQrDataUrl = await qrcode.toDataURL(qr, { width: 256 })
+            emitToUser(userId, 'wa:qr', { dataUrl: s.lastQrDataUrl })
+            s.isClientReady = false
+            emitToUser(userId, 'wa:status', { isReady: false })
         } catch (err) {
-            console.error('[wa] qr error', err)
-            if (state.io) state.io.emit('wa:error', { message: 'Failed generating QR', details: String(err) })
+            console.error(`[wa:${userId}] qr error`, err)
+            emitToUser(userId, 'wa:error', { message: 'Failed generating QR', details: String(err) })
         }
     })
 
     newClient.on('ready', () => {
-        console.log('[wa] ready')
-        state.isClientReady = true
-        state.lastQrDataUrl = null
-        // Capture account phone number for message scoping
-        try { state.currentAccountId = newClient.info?.wid?.user || null } catch (_) { }
-        broadcastStatus()
-        // NO hardcoded startup message
+        console.log(`[wa:${userId}] ready`)
+        s.isClientReady = true
+        s.lastQrDataUrl = null
+        try { s.currentAccountId = newClient.info?.wid?.user || null } catch (_) { }
+        emitToUser(userId, 'wa:status', { isReady: true })
     })
 
     newClient.on('authenticated', () => {
-        console.log('[wa] authenticated')
-        if (state.io) state.io.emit('wa:authenticated')
-        state.isClientReady = true
-        state.lastQrDataUrl = null
-        broadcastStatus()
+        console.log(`[wa:${userId}] authenticated`)
+        emitToUser(userId, 'wa:authenticated')
+        s.isClientReady = true
+        s.lastQrDataUrl = null
+        emitToUser(userId, 'wa:status', { isReady: true })
     })
 
     newClient.on('auth_failure', msg => {
-        console.warn('[wa] auth_failure', msg)
-        state.isClientReady = false
-        broadcastStatus()
-        if (state.io) state.io.emit('wa:error', { message: 'Authentication failed', details: msg })
-            ; (async () => {
-                try { await destroyClientAndWipeSession(); await createClient(); safeInitialize() } catch (e) {
-                    console.error('[wa] reinit after auth_failure error', e)
-                }
-            })()
+        console.warn(`[wa:${userId}] auth_failure`, msg)
+        s.isClientReady = false
+        emitToUser(userId, 'wa:status', { isReady: false })
+        emitToUser(userId, 'wa:error', { message: 'Authentication failed', details: msg });
+        (async () => {
+            try {
+                await destroyClientAndWipeSession(userId)
+                await createClient(userId)
+                safeInitialize(userId)
+            } catch (e) {
+                console.error(`[wa:${userId}] reinit after auth_failure error`, e)
+            }
+        })()
     })
 
     newClient.on('disconnected', reason => {
-        console.warn('[wa] disconnected', reason)
-        state.isClientReady = false
-        broadcastStatus()
-        if (state.io) state.io.emit('wa:disconnected', { reason })
-            ; (async () => {
-                try { await destroyClientAndWipeSession(); await createClient(); safeInitialize() } catch (e) {
-                    console.error('[wa] reinit after disconnect error', e)
-                }
-            })()
+        console.warn(`[wa:${userId}] disconnected`, reason)
+        s.isClientReady = false
+        emitToUser(userId, 'wa:status', { isReady: false })
+        emitToUser(userId, 'wa:disconnected', { reason });
+        (async () => {
+            try {
+                await destroyClientAndWipeSession(userId)
+                await createClient(userId)
+                safeInitialize(userId)
+            } catch (e) {
+                console.error(`[wa:${userId}] reinit after disconnect error`, e)
+            }
+        })()
     })
 
     newClient.on('message_create', async message => {
         let messageBody = message.body || ''
         let mediaInfo = null
 
-        // Download media if present
         if (message.hasMedia) {
             try {
                 const media = await message.downloadMedia()
                 if (media && media.data) {
-                    mediaInfo = { mimetype: media.mimetype || 'application/octet-stream', filename: media.filename || `media_${Date.now()}`, data: media.data, type: message.type }
+                    mediaInfo = {
+                        mimetype: media.mimetype || 'application/octet-stream',
+                        filename: media.filename || `media_${Date.now()}`,
+                        data: media.data,
+                        type: message.type,
+                    }
                     messageBody = message.caption || message.body || media.filename || `[${message.type}]`
                 } else {
                     messageBody = `[${message.type} - no data]`
                 }
             } catch (err) {
-                console.error('[wa] media download error', err)
+                console.error(`[wa:${userId}] media download error`, err)
                 messageBody = `[${message.type} - download failed]`
             }
         }
 
-        // Resolve partner name: our DB first, then raw number (no WA contact fallback)
+        // Partner name: DB first, then group name, then raw number
         const partnerId = message.fromMe ? message.to : message.from
         let resolvedPartnerName = ''
-
         try {
-            // Tier 1: Look in our DB contacts (the only source of truth for names)
-            if (state.currentUserId && partnerId) {
-                const dbContact = await Contact.findOne({ userId: state.currentUserId, chatId: partnerId })
+            if (userId && partnerId) {
+                const dbContact = await Contact.findOne({ userId, chatId: partnerId })
                 if (dbContact) resolvedPartnerName = dbContact.name
             }
-
-            // Tier 2: Group chats only — get group name from WA
             if (!resolvedPartnerName && partnerId) {
                 const chat = await message.getChat().catch(() => null)
-                if (chat?.isGroup) {
-                    resolvedPartnerName = chat.name || chat.id?.user || 'Group'
-                }
+                if (chat?.isGroup) resolvedPartnerName = chat.name || chat.id?.user || 'Group'
             }
         } catch (err) {
-            console.error('[wa] partner resolution error', err)
+            console.error(`[wa:${userId}] partner resolution error`, err)
         }
-
-        // Final fallback: raw phone number (strip @c.us)
         if (!resolvedPartnerName && partnerId) {
             resolvedPartnerName = partnerId.split('@')[0]
         }
@@ -175,18 +197,18 @@ function attachClientEvents(newClient) {
             timestamp: Date.now(),
             hasMedia: Boolean(message.hasMedia),
             mediaInfo,
-            type: message.type
+            type: message.type,
         }
 
-        // Broadcast to all connected dashboard UIs
-        if (state.io) state.io.emit('wa:message', record)
+        // Emit ONLY to this user's socket room
+        emitToUser(userId, 'wa:message', record)
 
-        // Persist to MongoDB (if a user is associated with this WA session)
-        if (state.currentUserId && state.currentAccountId) {
+        // Persist to MongoDB
+        if (userId && s.currentAccountId) {
             try {
                 await Message.create({
-                    userId: state.currentUserId,
-                    accountId: state.currentAccountId,
+                    userId,
+                    accountId: s.currentAccountId,
                     chatId: message.fromMe ? message.to : message.from,
                     from: message.from,
                     to: message.to,
@@ -200,14 +222,14 @@ function attachClientEvents(newClient) {
                     timestamp: new Date(),
                 })
             } catch (e) {
-                console.error('[wa] message save error', e)
+                console.error(`[wa:${userId}] message save error`, e)
             }
         }
 
-        // Auto-reply: only for incoming messages
-        if (!message.fromMe && state.currentUserId) {
+        // Auto-reply: incoming only
+        if (!message.fromMe && userId) {
             try {
-                const rule = await getAutoReply(state.currentUserId, message.from, messageBody)
+                const rule = await getAutoReply(userId, message.from, messageBody)
                 if (rule) {
                     const attachments = Array.isArray(rule.attachments) ? rule.attachments : []
                     const isSingleImage =
@@ -215,91 +237,95 @@ function attachClientEvents(newClient) {
                         (attachments[0].mimetype || '').startsWith('image/')
 
                     if (isSingleImage) {
-                        // Single image: use responseText as caption (send in one message)
                         const media = MessageMedia.fromFilePath(attachments[0].filePath)
                         await sendWithRecovery(() =>
                             newClient.sendMessage(message.from, media, {
-                                caption: rule.responseText || undefined
-                            })
-                        )
+                                caption: rule.responseText || undefined,
+                            }), userId)
                     } else {
-                        // Text first (if any)
                         if (rule.responseText) {
-                            await sendWithRecovery(() => newClient.sendMessage(message.from, rule.responseText))
+                            await sendWithRecovery(() =>
+                                newClient.sendMessage(message.from, rule.responseText), userId)
                         }
-                        // Then each attachment as a separate media message, no caption
                         for (const att of attachments) {
                             if (!att.filePath) continue
                             const media = MessageMedia.fromFilePath(att.filePath)
-                            await sendWithRecovery(() => newClient.sendMessage(message.from, media))
+                            await sendWithRecovery(() =>
+                                newClient.sendMessage(message.from, media), userId)
                         }
                     }
                 }
             } catch (e) {
-                console.error('[wa] auto-reply error', e)
+                console.error(`[wa:${userId}] auto-reply error`, e)
             }
         }
-
     })
 }
 
-async function createClient() {
-    if (state.client) return state.client
-    state.client = new Client({
-        authStrategy: new LocalAuth(),
+async function createClient(userId) {
+    const s = getSession(userId)
+    if (s.client) return s.client
+
+    s.client = new Client({
+        authStrategy: new LocalAuth({ clientId: userId }),
         webVersionCache: {
             type: 'remote',
             remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
-        }
+        },
     })
-    attachClientEvents(state.client)
-    return state.client
+    attachClientEvents(s.client, userId)
+    return s.client
 }
 
-function safeInitialize() {
-    if (!state.client) return
-    if (state.isInitializing) return
-    state.isInitializing = true
+function safeInitialize(userId) {
+    const s = getSession(userId)
+    if (!s.client) return
+    if (s.isInitializing) return
+    s.isInitializing = true
     try {
-        const p = state.client.initialize()
+        const p = s.client.initialize()
         if (p && typeof p.then === 'function') p
-            .then(() => { state.isInitializing = false })
+            .then(() => { s.isInitializing = false })
             .catch(async err => {
-                console.error('[wa] initialize error', err)
-                if (state.io) state.io.emit('wa:error', { message: 'Initialize failed', details: String(err) })
-                state.isInitializing = false
-                await destroyClientAndWipeSession()
+                console.error(`[wa:${userId}] initialize error`, err)
+                emitToUser(userId, 'wa:error', { message: 'Initialize failed', details: String(err) })
+                s.isInitializing = false
+                await destroyClientAndWipeSession(userId)
                 await new Promise(r => setTimeout(r, 500))
-                await createClient()
-                setTimeout(() => safeInitialize(), 200)
+                await createClient(userId)
+                setTimeout(() => safeInitialize(userId), 200)
             })
     } catch (err) {
-        console.error('[wa] initialize threw', err)
-        if (state.io) state.io.emit('wa:error', { message: 'Initialize threw', details: String(err) })
-        state.isInitializing = false
-        setTimeout(() => safeInitialize(), 300)
+        console.error(`[wa:${userId}] initialize threw`, err)
+        emitToUser(userId, 'wa:error', { message: 'Initialize threw', details: String(err) })
+        s.isInitializing = false
+        setTimeout(() => safeInitialize(userId), 300)
     }
 }
 
-async function destroyClientAndWipeSession() {
+async function destroyClientAndWipeSession(userId) {
+    const s = getSession(userId)
     try {
-        if (state.client) {
-            try { await state.client.logout() } catch (_) { }
-            try { await state.client.destroy() } catch (_) { }
+        if (s.client) {
+            try { await s.client.logout() } catch (_) { }
+            try { await s.client.destroy() } catch (_) { }
         }
     } finally {
-        state.client = null
-        state.isClientReady = false
-        state.lastQrDataUrl = null
-        state.currentAccountId = null
-        broadcastStatus()
+        s.client = null
+        s.isClientReady = false
+        s.lastQrDataUrl = null
+        s.currentAccountId = null
+        emitToUser(userId, 'wa:status', { isReady: false })
     }
-    const authDir = getAuthDir()
-    await fs.promises.rm(authDir, { recursive: true, force: true })
+    const sessionDir = getSessionDir(userId)
+    await fs.promises.rm(sessionDir, { recursive: true, force: true })
+    console.log(`[wa:${userId}] session destroyed`)
 }
 
 module.exports = {
-    state,
+    sessions,
+    getSession,
+    setIO,
     createClient,
     safeInitialize,
     destroyClientAndWipeSession,

@@ -73,7 +73,7 @@ export function Analytics() {
     }, [])
 
     return (
-        <div style={{ maxWidth: 1000, margin: '0 auto' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 40 }}>
                 <div>
                     <h1 style={{ margin: 0, fontSize: 32 }}>Analytics</h1>

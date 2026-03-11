@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState } from 'react'
+import ReactDOM from 'react-dom'
 import { useAuth } from '../context/AuthContext'
 import { useWA } from '../context/WAContext'
 import {
@@ -331,61 +332,115 @@ export function Dashboard() {
                 </form>
             </div>
 
-            {/* Enhanced QR Modal */}
-            <AnimatePresence>
-                {showQrModal && (
+            {/* QR Modal rendered via portal → sits above everything */}
+            {showQrModal && ReactDOM.createPortal(
+                <AnimatePresence>
                     <motion.div
+                        key="qr-backdrop"
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="qr-modal show"
                         onClick={() => setShowQrModal(false)}
+                        style={{
+                            position: 'fixed', inset: 0, zIndex: 9999,
+                            background: 'rgba(0,0,0,0.75)',
+                            backdropFilter: 'blur(8px)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        }}
                     >
                         <motion.div
-                            initial={{ scale: 0.9, opacity: 0, y: 20 }}
+                            key="qr-card"
+                            initial={{ scale: 0.92, opacity: 0, y: 24 }}
                             animate={{ scale: 1, opacity: 1, y: 0 }}
-                            exit={{ scale: 0.9, opacity: 0, y: 20 }}
-                            className="qr-modal-content glass"
+                            exit={{ scale: 0.92, opacity: 0, y: 24 }}
+                            transition={{ type: 'spring', stiffness: 320, damping: 28 }}
                             onClick={e => e.stopPropagation()}
-                            style={{ position: 'relative' }}
+                            className="glass"
+                            style={{
+                                padding: '40px 48px',
+                                borderRadius: 28,
+                                border: '1px solid rgba(16, 185, 129, 0.2)',
+                                boxShadow: '0 32px 80px rgba(0,0,0,0.5)',
+                                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                                position: 'relative', maxWidth: 420, width: '90vw',
+                            }}
                         >
+                            {/* Close button */}
                             <button
                                 onClick={() => setShowQrModal(false)}
-                                style={{ position: 'absolute', top: 20, right: 20, background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+                                style={{
+                                    position: 'absolute', top: 16, right: 16,
+                                    background: 'rgba(255,255,255,0.06)',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 8, width: 32, height: 32,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    cursor: 'pointer', color: 'var(--text-muted)',
+                                }}
                             >
-                                <X size={20} />
+                                <X size={16} />
                             </button>
 
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                                <div style={{ width: 60, height: 60, borderRadius: 20, background: 'var(--accent-light)', color: 'var(--accent)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
-                                    <QrCode size={32} />
-                                </div>
-                                <h3 style={{ marginBottom: 8, fontSize: 24 }}>Connect WhatsApp</h3>
-                                <p style={{ marginBottom: 32, maxWidth: 300 }}>Scan this QR code with your phone to start automating your messages.</p>
+                            {/* Icon */}
+                            <div style={{
+                                width: 56, height: 56, borderRadius: 18,
+                                background: 'var(--accent-light)',
+                                border: '1px solid rgba(16,185,129,0.25)',
+                                color: 'var(--accent)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                marginBottom: 20,
+                            }}>
+                                <QrCode size={28} />
+                            </div>
 
-                                {qrDataUrl ? (
-                                    <motion.div
-                                        initial={{ opacity: 0 }}
-                                        animate={{ opacity: 1 }}
-                                        style={{ background: '#fff', padding: 16, borderRadius: 24, boxShadow: '0 20px 40px rgba(0,0,0,0.2)' }}
-                                    >
-                                        <img src={qrDataUrl} alt="QR Code" style={{ width: 240, height: 240, display: 'block' }} />
-                                    </motion.div>
-                                ) : (
-                                    <div style={{ width: 272, height: 272, background: 'rgba(255,255,255,0.05)', borderRadius: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                        <RefreshCcw className="animate-spin" style={{ opacity: 0.5 }} />
-                                    </div>
-                                )}
+                            <h3 style={{ margin: '0 0 8px 0', fontSize: 22, textAlign: 'center' }}>
+                                Connect WhatsApp
+                            </h3>
+                            <p style={{ margin: '0 0 28px 0', color: 'var(--text-muted)', fontSize: 14, textAlign: 'center', lineHeight: 1.6 }}>
+                                Open WhatsApp on your phone → Linked Devices → Link a Device
+                            </p>
 
-                                <div style={{ marginTop: 32, display: 'flex', alignItems: 'center', gap: 12, color: 'var(--text-muted)', fontSize: 13 }}>
-                                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent)' }} />
-                                    Waiting for scan...
+                            {/* QR code box */}
+                            {qrDataUrl ? (
+                                <motion.div
+                                    initial={{ opacity: 0, scale: 0.95 }}
+                                    animate={{ opacity: 1, scale: 1 }}
+                                    style={{
+                                        background: '#fff', padding: 14,
+                                        borderRadius: 20,
+                                        boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+                                    }}
+                                >
+                                    <img src={qrDataUrl} alt="QR Code" style={{ width: 220, height: 220, display: 'block' }} />
+                                </motion.div>
+                            ) : (
+                                <div style={{
+                                    width: 248, height: 248,
+                                    background: 'rgba(255,255,255,0.04)',
+                                    borderRadius: 20, border: '1px solid var(--border)',
+                                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
+                                    color: 'var(--text-muted)',
+                                }}>
+                                    <RefreshCcw size={28} style={{ opacity: 0.4, animation: 'spin 1.5s linear infinite' }} />
+                                    <span style={{ fontSize: 13 }}>Generating QR…</span>
                                 </div>
+                            )}
+
+                            {/* Status pill */}
+                            <div style={{
+                                marginTop: 24, display: 'flex', alignItems: 'center', gap: 8,
+                                background: 'rgba(16,185,129,0.08)',
+                                border: '1px solid rgba(16,185,129,0.2)',
+                                padding: '7px 18px', borderRadius: 99,
+                                fontSize: 13, color: 'var(--text-muted)',
+                            }}>
+                                <div style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)' }} />
+                                Waiting for scan…
                             </div>
                         </motion.div>
                     </motion.div>
-                )}
-            </AnimatePresence>
+                </AnimatePresence>,
+                document.body
+            )}
         </div>
     )
 }

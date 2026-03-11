@@ -21,9 +21,11 @@ const messageRoutes = require('./routes/messages')
 const globalRuleRoutes = require('./routes/globalRules')
 const analyticsRoutes = require('./routes/analytics')
 
-// WhatsApp module
+// WhatsApp module — per-user session architecture
 const {
-	state: waState,
+	sessions,
+	getSession,
+	setIO,
 	createClient,
 	safeInitialize,
 	destroyClientAndWipeSession,
@@ -45,8 +47,8 @@ const app = express()
 const server = http.createServer(app)
 const io = new Server(server, { cors: { origin: '*' } })
 
-// Inject io into WA state so client.js can broadcast
-waState.io = io
+// Inject io into WA module so client.js can emit to user rooms
+setIO(io)
 
 app.use(express.json())
 app.use(cors({ origin: process.env.FRONTEND_URL || '*' }))
@@ -68,14 +70,13 @@ app.use('/api/messages', authMiddleware, messageRoutes)
 app.use('/api/global-rules', authMiddleware, globalRuleRoutes)
 app.use('/api/analytics', authMiddleware, analyticsRoutes)
 
-// ── WhatsApp connection control ────────────────────────────────────────────────
-// These endpoints set the userId on the WA state so messages are saved under the right user
+// ── WhatsApp connection control — per user ─────────────────────────────────────
 
 app.post('/api/connect', authMiddleware, async (req, res) => {
 	try {
-		waState.currentUserId = req.user.userId
-		await createClient()
-		safeInitialize()
+		const userId = req.user.userId
+		await createClient(userId)
+		safeInitialize(userId)
 		return res.json({ ok: true })
 	} catch (err) {
 		return res.status(500).json({ ok: false, error: String(err) })
@@ -84,9 +85,9 @@ app.post('/api/connect', authMiddleware, async (req, res) => {
 
 app.get('/api/connect', authMiddleware, async (req, res) => {
 	try {
-		waState.currentUserId = req.user.userId
-		await createClient()
-		safeInitialize()
+		const userId = req.user.userId
+		await createClient(userId)
+		safeInitialize(userId)
 		return res.json({ ok: true })
 	} catch (err) {
 		return res.status(500).json({ ok: false, error: String(err) })
@@ -95,7 +96,7 @@ app.get('/api/connect', authMiddleware, async (req, res) => {
 
 app.post('/api/disconnect', authMiddleware, async (req, res) => {
 	try {
-		await destroyClientAndWipeSession()
+		await destroyClientAndWipeSession(req.user.userId)
 		return res.json({ ok: true })
 	} catch (err) {
 		return res.status(500).json({ ok: false, error: String(err) })
@@ -104,7 +105,7 @@ app.post('/api/disconnect', authMiddleware, async (req, res) => {
 
 app.get('/api/disconnect', authMiddleware, async (req, res) => {
 	try {
-		await destroyClientAndWipeSession()
+		await destroyClientAndWipeSession(req.user.userId)
 		return res.json({ ok: true })
 	} catch (err) {
 		return res.status(500).json({ ok: false, error: String(err) })
@@ -112,7 +113,6 @@ app.get('/api/disconnect', authMiddleware, async (req, res) => {
 })
 
 // ── Send message ───────────────────────────────────────────────────────────────
-// Multer for send-form file uploads
 const uploadsDir = path.join(__dirname, 'uploads')
 try { fs.mkdirSync(uploadsDir, { recursive: true }) } catch (_) { }
 const sendStorage = multer.diskStorage({
@@ -125,38 +125,41 @@ const sendStorage = multer.diskStorage({
 const upload = multer({ storage: sendStorage, limits: { fileSize: 25 * 1024 * 1024 } })
 
 app.post('/api/send', authMiddleware, upload.any(), async (req, res) => {
-	if (!waState.isClientReady || !waState.client) {
-		return res.status(503).json({ ok: false, error: 'WhatsApp client not ready' })
+	const userId = req.user.userId
+	const userSession = getSession(userId)
+
+	if (!userSession.isClientReady || !userSession.client) {
+		return res.status(503).json({ ok: false, error: 'WhatsApp client not ready. Please connect first.' })
 	}
+
 	const { number } = req.body || {}
 	const message = typeof req.body?.message === 'string' ? req.body.message.trim() : ''
 	if (!number) return res.status(400).json({ ok: false, error: 'Missing number' })
+
 	const chatId = normalizeToChatId(number)
 	const files = Array.isArray(req.files) ? req.files : []
 	const hasFiles = files.length > 0
 	if (!hasFiles && !message) return res.status(400).json({ ok: false, error: 'Provide message or attachment' })
+
 	try {
 		const isSingleImage =
 			files.length === 1 &&
 			(files[0].mimetype || '').startsWith('image/')
 
 		if (isSingleImage) {
-			// Single image: send as image with message as caption
 			const media = MessageMedia.fromFilePath(files[0].path)
 			await sendWithRecovery(() =>
-				waState.client.sendMessage(chatId, media, { caption: message || undefined })
-			)
+				userSession.client.sendMessage(chatId, media, { caption: message || undefined }),
+				userId)
 			fs.promises.unlink(files[0].path).catch(() => { })
 		} else {
-			// Text first (if any)
 			if (message) {
-				await sendWithRecovery(() => waState.client.sendMessage(chatId, message))
+				await sendWithRecovery(() => userSession.client.sendMessage(chatId, message), userId)
 			}
-			// Each file as separate media, no caption
 			for (const file of files) {
 				if (!file.path) continue
 				const media = MessageMedia.fromFilePath(file.path)
-				await sendWithRecovery(() => waState.client.sendMessage(chatId, media))
+				await sendWithRecovery(() => userSession.client.sendMessage(chatId, media), userId)
 				fs.promises.unlink(file.path).catch(() => { })
 				if (files.indexOf(file) < files.length - 1) {
 					await new Promise(r => setTimeout(r, 300))
@@ -172,7 +175,6 @@ app.post('/api/send', authMiddleware, upload.any(), async (req, res) => {
 
 // ── Socket.IO ─────────────────────────────────────────────────────────────────
 io.use((socket, next) => {
-	// Verify JWT token on socket handshake
 	const token = socket.handshake.auth?.token
 	if (!token) return next(new Error('Authentication error'))
 	try {
@@ -186,42 +188,44 @@ io.use((socket, next) => {
 })
 
 io.on('connection', async socket => {
+	const userId = socket.userId
 	console.log('[io] client connected', socket.id, socket.username)
 
-	// If WA started at boot with no userId, associate the first authenticated socket user
-	if (!waState.currentUserId) {
-		waState.currentUserId = socket.userId
-		console.log('[io] auto-associated userId', socket.userId, 'with running WA session')
-	}
+	// Join this user's private room — all WA events go only to this room
+	socket.join(`user:${userId}`)
 
-	// Sync current WA status
-	socket.emit('wa:status', { isReady: waState.isClientReady })
+	// Get this user's WA session state
+	const userSession = getSession(userId)
+
+	// Send current WA status for this user
+	socket.emit('wa:status', { isReady: userSession.isClientReady })
+
 	// Replay last 100 messages from DB for this user
 	try {
-		const history = await Message.find({ userId: socket.userId })
+		const history = await Message.find({ userId })
 			.sort({ timestamp: -1 })
 			.limit(100)
 			.lean()
 		socket.emit('wa:history', history.reverse())
 	} catch (_) { }
-	// Replay pending QR if still waiting for scan
-	if (!waState.isClientReady && waState.lastQrDataUrl) {
-		socket.emit('wa:qr', { dataUrl: waState.lastQrDataUrl })
+
+	// Replay pending QR if still waiting for scan (for this user)
+	if (!userSession.isClientReady && userSession.lastQrDataUrl) {
+		socket.emit('wa:qr', { dataUrl: userSession.lastQrDataUrl })
 	}
 })
 
-// 404 handler (last)
+// 404 handler
 app.use((req, res) => {
 	res.status(404).json({ ok: false, error: 'Not found' })
 })
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000
-	; (async () => {
-		await connectDB()
-		server.listen(PORT, () => {
-			console.log(`Server listening on http://localhost:${PORT}`)
-			// Auto-start WA client (userId will be set properly when user logs in via /api/connect)
-			createClient().then(() => safeInitialize())
-		})
-	})()
+const PORT = process.env.PORT || 3000;
+(async () => {
+	await connectDB()
+	server.listen(PORT, () => {
+		console.log(`Server listening on http://localhost:${PORT}`)
+		// No auto-start — each user's session starts on /api/connect
+	})
+})()
