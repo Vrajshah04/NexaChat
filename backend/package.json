@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
-    "build": "node --check server.js && node --check whatsapp/client.js && node --check routes/contacts.js && node --check routes/globalRules.js && echo \"\u001b[32m\u2713 Build OK — no syntax errors\u001b[0m\""
+    "build": "node --check server.js && node --check whatsapp/client.js && node --check routes/contacts.js && node --check routes/globalRules.js && echo \"\u001b[32m\u2713 Build OK — no syntax errors\u001b[0m\"",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "keywords": [],
   "author": "",
