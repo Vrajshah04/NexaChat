@@ -269,6 +269,7 @@ async function createClient(userId) {
     s.client = new Client({
         authStrategy: new LocalAuth({ clientId: userId }),
         puppeteer: {
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || (process.env.RENDER ? '/usr/bin/google-chrome' : undefined),
             args: ['--no-sandbox', '--disable-setuid-sandbox'],
         },
         webVersionCache: {
