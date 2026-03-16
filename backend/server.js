@@ -132,11 +132,22 @@ app.post('/api/send', authMiddleware, upload.any(), async (req, res) => {
 		return res.status(503).json({ ok: false, error: 'WhatsApp client not ready. Please connect first.' })
 	}
 
-	const { number } = req.body || {}
+	const { number, numbers } = req.body || {}
 	const message = typeof req.body?.message === 'string' ? req.body.message.trim() : ''
-	if (!number) return res.status(400).json({ ok: false, error: 'Missing number' })
 
-	const chatId = normalizeToChatId(number)
+	let targetNumbers = []
+	if (numbers) {
+		try {
+			targetNumbers = JSON.parse(numbers)
+		} catch (e) {
+			targetNumbers = []
+		}
+	} else if (number) {
+		targetNumbers = [number]
+	}
+
+	if (targetNumbers.length === 0) return res.status(400).json({ ok: false, error: 'Missing recipients (number or numbers)' })
+
 	const files = Array.isArray(req.files) ? req.files : []
 	const hasFiles = files.length > 0
 	if (!hasFiles && !message) return res.status(400).json({ ok: false, error: 'Provide message or attachment' })
@@ -146,28 +157,47 @@ app.post('/api/send', authMiddleware, upload.any(), async (req, res) => {
 			files.length === 1 &&
 			(files[0].mimetype || '').startsWith('image/')
 
-		if (isSingleImage) {
-			const media = MessageMedia.fromFilePath(files[0].path)
-			await sendWithRecovery(() =>
-				userSession.client.sendMessage(chatId, media, { caption: message || undefined }),
-				userId)
-			fs.promises.unlink(files[0].path).catch(() => { })
-		} else {
-			if (message) {
-				await sendWithRecovery(() => userSession.client.sendMessage(chatId, message), userId)
-			}
-			for (const file of files) {
-				if (!file.path) continue
-				const media = MessageMedia.fromFilePath(file.path)
-				await sendWithRecovery(() => userSession.client.sendMessage(chatId, media), userId)
-				fs.promises.unlink(file.path).catch(() => { })
-				if (files.indexOf(file) < files.length - 1) {
-					await new Promise(r => setTimeout(r, 300))
+		for (const num of targetNumbers) {
+			const chatId = normalizeToChatId(num)
+
+			if (isSingleImage) {
+				const media = MessageMedia.fromFilePath(files[0].path)
+				await sendWithRecovery(() =>
+					userSession.client.sendMessage(chatId, media, { caption: message || undefined }),
+					userId)
+			} else {
+				if (message) {
+					await sendWithRecovery(() => userSession.client.sendMessage(chatId, message), userId)
+				}
+				for (const file of files) {
+					if (!file.path) continue
+					const media = MessageMedia.fromFilePath(file.path)
+					await sendWithRecovery(() => userSession.client.sendMessage(chatId, media), userId)
+					if (files.indexOf(file) < files.length - 1) {
+						await new Promise(r => setTimeout(r, 300))
+					}
 				}
 			}
+
+			// Delay between recipients to prevent spam-blocking
+			if (targetNumbers.indexOf(num) < targetNumbers.length - 1) {
+				await new Promise(r => setTimeout(r, 1500))
+			}
 		}
+
+		// Cleanup files after sending to all recipients
+		for (const file of files) {
+			if (file.path) {
+				fs.promises.unlink(file.path).catch(() => { })
+			}
+		}
+
 		return res.json({ ok: true })
 	} catch (err) {
+		// Ensure cleanup happens even on error
+		for (const file of files) {
+			if (file.path) fs.promises.unlink(file.path).catch(() => { })
+		}
 		const statusCode = isDetachedFrameError(err) ? 503 : 500
 		return res.status(statusCode).json({ ok: false, error: String(err.message || err) })
 	}

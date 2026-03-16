@@ -14,7 +14,8 @@ import {
     Image as ImageIcon,
     FileText,
     Film,
-    File
+    File,
+    Plus
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -52,6 +53,35 @@ export function Dashboard() {
     // Multi-attachment state
     const [attachments, setAttachments] = useState([]) // Array of File objects
 
+    // Bulk messaging state
+    const [contacts, setContacts] = useState([])
+    const [selectedRecipients, setSelectedRecipients] = useState([])
+    const [recipientInput, setRecipientInput] = useState('')
+    const [showContactDropdown, setShowContactDropdown] = useState(false)
+
+    // Fetch contacts for bulk messaging
+    useEffect(() => {
+        async function fetchContacts() {
+            try {
+                const res = await authFetch('/api/contacts')
+                const data = await res.json()
+                if (data.ok) setContacts(data.contacts)
+            } catch (_) { }
+        }
+        if (token) fetchContacts()
+    }, [token])
+
+    // Close contact dropdown on click outside
+    useEffect(() => {
+        function handleClickOutside(e) {
+            if (!e.target.closest('.recipient-container')) {
+                setShowContactDropdown(false)
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside)
+        return () => document.removeEventListener('mousedown', handleClickOutside)
+    }, [])
+
     const isInitialLoad = useRef(true)
 
     // Instant jump on first load, smooth scroll for new incoming messages
@@ -85,8 +115,15 @@ export function Dashboard() {
 
     async function handleSubmit(e) {
         e.preventDefault()
-        const number = numberRef.current?.value.trim()
-        if (!number) return
+
+        // Combine already selected contacts with whatever is currently typed
+        const targetNumbers = [...selectedRecipients]
+        const pendingNumber = recipientInput.trim()
+        if (pendingNumber && !targetNumbers.includes(pendingNumber)) {
+            targetNumbers.push(pendingNumber)
+        }
+
+        if (targetNumbers.length === 0) return
 
         const message = captionRef.current?.value?.trim() || ''
         const hasFiles = attachments.length > 0
@@ -95,7 +132,7 @@ export function Dashboard() {
 
         try {
             const form = new FormData()
-            form.append('number', number)
+            form.append('numbers', JSON.stringify(targetNumbers))
             if (message) form.append('message', message)
             for (const file of attachments) {
                 form.append('attachment', file)
@@ -108,6 +145,8 @@ export function Dashboard() {
             } else {
                 if (captionRef.current) captionRef.current.value = ''
                 setAttachments([])
+                setSelectedRecipients([])
+                setRecipientInput('')
             }
         } catch { alert('Network error') }
     }
@@ -286,9 +325,113 @@ export function Dashboard() {
                 </AnimatePresence>
 
                 <form className="send-form glass shadow-lg" onSubmit={handleSubmit}>
-                    <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: '0 12px', width: 200 }}>
-                        <User size={16} color="var(--text-muted)" />
-                        <input id="number" ref={numberRef} type="tel" placeholder="91955xxxxxxx" required style={{ width: '100%' }} />
+                    {/* Bulk Recipients Input */}
+                    <div className="recipient-container" style={{ position: 'relative', display: 'flex', alignItems: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: 10, padding: '4px 8px', minWidth: 240, maxWidth: 350, flexWrap: 'wrap', gap: 4 }}>
+                        <User size={16} color="var(--text-muted)" style={{ margin: '0 4px', flexShrink: 0 }} />
+
+                        {selectedRecipients.map((rec, idx) => {
+                            const contactName = contacts.find(c => c.number === rec || c.chatId?.replace('@c.us', '') === rec)?.name || rec
+                            return (
+                                <div key={idx} style={{
+                                    display: 'flex', alignItems: 'center', gap: 4,
+                                    background: 'rgba(16, 185, 129, 0.15)', color: 'var(--accent)',
+                                    padding: '2px 8px', borderRadius: 12, fontSize: 12, fontWeight: 600,
+                                    border: '1px solid rgba(16, 185, 129, 0.3)'
+                                }}>
+                                    <span>{contactName}</span>
+                                    <X size={12} style={{ cursor: 'pointer', opacity: 0.7 }} onClick={() => {
+                                        setSelectedRecipients(prev => prev.filter((_, i) => i !== idx))
+                                    }} />
+                                </div>
+                            )
+                        })}
+
+                        <input
+                            type="text"
+                            placeholder={selectedRecipients.length === 0 ? "To (contacts or number)..." : ""}
+                            value={recipientInput}
+                            onChange={(e) => {
+                                setRecipientInput(e.target.value)
+                                setShowContactDropdown(true)
+                            }}
+                            onFocus={() => setShowContactDropdown(true)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ',') {
+                                    e.preventDefault()
+                                    if (recipientInput.trim() && !selectedRecipients.includes(recipientInput.trim())) {
+                                        setSelectedRecipients(prev => [...prev, recipientInput.trim()])
+                                        setRecipientInput('')
+                                        setShowContactDropdown(false)
+                                    }
+                                } else if (e.key === 'Backspace' && !recipientInput && selectedRecipients.length > 0) {
+                                    setSelectedRecipients(prev => prev.slice(0, -1))
+                                }
+                            }}
+                            style={{
+                                flex: 1, minWidth: 80, background: 'transparent', border: 'none',
+                                color: 'var(--text)', outline: 'none', fontSize: 13, padding: '4px 0'
+                            }}
+                        />
+
+                        {/* Dropdown for Contacts */}
+                        <AnimatePresence>
+                            {showContactDropdown && (contacts.length > 0 || recipientInput) && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 5 }}
+                                    style={{
+                                        position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, width: '100%',
+                                        background: 'rgba(15, 23, 42, 0.95)', backdropFilter: 'blur(10px)',
+                                        border: '1px solid var(--border)', borderRadius: 12, padding: 8,
+                                        maxHeight: 200, overflowY: 'auto', zIndex: 50,
+                                        boxShadow: '0 -10px 40px rgba(0,0,0,0.5)',
+                                        display: 'flex', flexDirection: 'column', gap: 2
+                                    }}>
+                                    {contacts.filter(c => {
+                                        const search = recipientInput.toLowerCase()
+                                        return c.name?.toLowerCase().includes(search) || (c.number && c.number.includes(search)) || (c.chatId && c.chatId.includes(search))
+                                    }).map(c => {
+                                        const num = c.number || c.chatId?.replace('@c.us', '')
+                                        if (selectedRecipients.includes(num)) return null
+                                        return (
+                                            <div
+                                                key={c.chatId}
+                                                onClick={() => {
+                                                    setSelectedRecipients(prev => [...prev, num])
+                                                    setRecipientInput('')
+                                                    setShowContactDropdown(false)
+                                                }}
+                                                style={{
+                                                    padding: '8px 12px', borderRadius: 8, cursor: 'pointer',
+                                                    display: 'flex', flexDirection: 'column', gap: 2,
+                                                    transition: 'background 0.2s', width: '100%', boxSizing: 'border-box'
+                                                }}
+                                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
+                                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                            >
+                                                <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</div>
+                                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{num}</div>
+                                            </div>
+                                        )
+                                    })}
+                                    {recipientInput.trim() && !contacts.some(c => (c.number || c.chatId?.replace('@c.us', '')) === recipientInput.trim()) && !selectedRecipients.includes(recipientInput.trim()) && (
+                                        <div
+                                            onClick={() => {
+                                                setSelectedRecipients(prev => [...prev, recipientInput.trim()])
+                                                setRecipientInput('')
+                                                setShowContactDropdown(false)
+                                            }}
+                                            style={{
+                                                padding: '8px 12px', borderRadius: 8, cursor: 'pointer',
+                                                display: 'flex', alignItems: 'center', gap: 8, color: 'var(--accent)',
+                                                background: 'rgba(16, 185, 129, 0.1)', marginTop: 4
+                                            }}
+                                        >
+                                            <Plus size={14} /> Add "{recipientInput.trim()}"
+                                        </div>
+                                    )}
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
                     </div>
 
                     <input id="caption" ref={captionRef} type="text" placeholder="Type a message..." style={{ paddingLeft: 8 }} />
