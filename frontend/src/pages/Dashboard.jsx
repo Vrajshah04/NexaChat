@@ -15,7 +15,9 @@ import {
     FileText,
     Film,
     File,
-    Plus
+    Plus,
+    Search,
+    Check
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -57,7 +59,9 @@ export function Dashboard() {
     const [contacts, setContacts] = useState([])
     const [selectedRecipients, setSelectedRecipients] = useState([])
     const [recipientInput, setRecipientInput] = useState('')
+    const [dropdownSearch, setDropdownSearch] = useState('')
     const [showContactDropdown, setShowContactDropdown] = useState(false)
+    const recipientInputRef = useRef(null)
 
     // Fetch contacts for bulk messaging
     useEffect(() => {
@@ -87,6 +91,10 @@ export function Dashboard() {
     // Instant jump on first load, smooth scroll for new incoming messages
     useEffect(() => {
         if (!messagesEndRef.current) return
+
+        // Block the initial instantaneous scroll from being consumed by an empty state
+        if (messages.length === 0) return
+
         if (isInitialLoad.current) {
             messagesEndRef.current.scrollIntoView({ behavior: 'instant' })
             isInitialLoad.current = false
@@ -347,8 +355,9 @@ export function Dashboard() {
                         })}
 
                         <input
+                            ref={recipientInputRef}
                             type="text"
-                            placeholder={selectedRecipients.length === 0 ? "To (contacts or number)..." : ""}
+                            placeholder={selectedRecipients.length === 0 ? "Search or enter number..." : ""}
                             value={recipientInput}
                             onChange={(e) => {
                                 setRecipientInput(e.target.value)
@@ -361,14 +370,13 @@ export function Dashboard() {
                                     if (recipientInput.trim() && !selectedRecipients.includes(recipientInput.trim())) {
                                         setSelectedRecipients(prev => [...prev, recipientInput.trim()])
                                         setRecipientInput('')
-                                        setShowContactDropdown(false)
                                     }
                                 } else if (e.key === 'Backspace' && !recipientInput && selectedRecipients.length > 0) {
                                     setSelectedRecipients(prev => prev.slice(0, -1))
                                 }
                             }}
                             style={{
-                                flex: 1, minWidth: 80, background: 'transparent', border: 'none',
+                                flex: 1, minWidth: 120, background: 'transparent', border: 'none',
                                 color: 'var(--text)', outline: 'none', fontSize: 13, padding: '4px 0'
                             }}
                         />
@@ -378,55 +386,96 @@ export function Dashboard() {
                             {showContactDropdown && (contacts.length > 0 || recipientInput) && (
                                 <motion.div
                                     initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 5 }}
+                                    className="hide-scrollbar"
                                     style={{
-                                        position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, width: '100%',
+                                        position: 'absolute', bottom: 'calc(100% + 8px)', left: 0, width: '100%', minWidth: 260,
                                         background: 'rgba(15, 23, 42, 0.95)', backdropFilter: 'blur(10px)',
                                         border: '1px solid var(--border)', borderRadius: 12, padding: 8,
-                                        maxHeight: 200, overflowY: 'auto', zIndex: 50,
+                                        maxHeight: 250, overflowY: 'auto', zIndex: 50,
                                         boxShadow: '0 -10px 40px rgba(0,0,0,0.5)',
-                                        display: 'flex', flexDirection: 'column', gap: 2
+                                        display: 'flex', flexDirection: 'column', gap: 2,
+                                        scrollbarWidth: 'none', msOverflowStyle: 'none'
                                     }}>
+
+                                    <style>{`.hide-scrollbar::-webkit-scrollbar { display: none; }`}</style>
+
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px 8px 8px', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: 4, color: 'var(--text-muted)' }}>
+                                        <Search size={14} />
+                                        <input
+                                            type="text"
+                                            placeholder="Search recipients"
+                                            value={dropdownSearch}
+                                            onChange={(e) => setDropdownSearch(e.target.value)}
+                                            style={{
+                                                flex: 1, background: 'transparent', border: 'none',
+                                                color: 'var(--text)', outline: 'none', fontSize: 13,
+                                                padding: 0
+                                            }}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') e.preventDefault()
+                                            }}
+                                        />
+                                    </div>
+
                                     {contacts.filter(c => {
-                                        const search = recipientInput.toLowerCase()
+                                        const search = (dropdownSearch || recipientInput).toLowerCase()
                                         return c.name?.toLowerCase().includes(search) || (c.number && c.number.includes(search)) || (c.chatId && c.chatId.includes(search))
                                     }).map(c => {
                                         const num = c.number || c.chatId?.replace('@c.us', '')
-                                        if (selectedRecipients.includes(num)) return null
+                                        const isSelected = selectedRecipients.includes(num)
                                         return (
                                             <div
                                                 key={c.chatId}
-                                                onClick={() => {
-                                                    setSelectedRecipients(prev => [...prev, num])
-                                                    setRecipientInput('')
-                                                    setShowContactDropdown(false)
+                                                // We use onMouseDown instead of onClick to prevent the input from losing focus on clicks
+                                                // which causes the dropdown to flicker or hide. e.preventDefault() stops focus change.
+                                                onMouseDown={(e) => {
+                                                    e.preventDefault()
+                                                    if (isSelected) {
+                                                        setSelectedRecipients(prev => prev.filter(r => r !== num))
+                                                    } else {
+                                                        setSelectedRecipients(prev => [...prev, num])
+                                                    }
                                                 }}
                                                 style={{
                                                     padding: '8px 12px', borderRadius: 8, cursor: 'pointer',
-                                                    display: 'flex', flexDirection: 'column', gap: 2,
-                                                    transition: 'background 0.2s', width: '100%', boxSizing: 'border-box'
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                                                    transition: 'background 0.2s', width: '100%', boxSizing: 'border-box',
+                                                    background: isSelected ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                                                    border: isSelected ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid transparent'
                                                 }}
-                                                onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.05)'}
-                                                onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                                onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.05)' }}
+                                                onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent' }}
                                             >
-                                                <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</div>
-                                                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{num}</div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                                                    <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</div>
+                                                    <div style={{ fontSize: 11, color: isSelected ? 'var(--accent)' : 'var(--text-muted)' }}>{num}</div>
+                                                </div>
+                                                {isSelected && <Check size={16} color="var(--accent)" />}
                                             </div>
                                         )
                                     })}
-                                    {recipientInput.trim() && !contacts.some(c => (c.number || c.chatId?.replace('@c.us', '')) === recipientInput.trim()) && !selectedRecipients.includes(recipientInput.trim()) && (
+                                    {recipientInput.trim() && !contacts.some(c => (c.number || c.chatId?.replace('@c.us', '')) === recipientInput.trim()) && (
                                         <div
-                                            onClick={() => {
-                                                setSelectedRecipients(prev => [...prev, recipientInput.trim()])
-                                                setRecipientInput('')
-                                                setShowContactDropdown(false)
+                                            onMouseDown={(e) => {
+                                                e.preventDefault()
+                                                if (selectedRecipients.includes(recipientInput.trim())) {
+                                                    setSelectedRecipients(prev => prev.filter(r => r !== recipientInput.trim()))
+                                                } else {
+                                                    setSelectedRecipients(prev => [...prev, recipientInput.trim()])
+                                                }
                                             }}
                                             style={{
                                                 padding: '8px 12px', borderRadius: 8, cursor: 'pointer',
-                                                display: 'flex', alignItems: 'center', gap: 8, color: 'var(--accent)',
-                                                background: 'rgba(16, 185, 129, 0.1)', marginTop: 4
+                                                display: 'flex', alignItems: 'center', justifyContent: 'space-between', color: 'var(--accent)',
+                                                background: selectedRecipients.includes(recipientInput.trim()) ? 'rgba(16, 185, 129, 0.15)' : 'rgba(16, 185, 129, 0.05)',
+                                                marginTop: 4,
+                                                border: selectedRecipients.includes(recipientInput.trim()) ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid transparent'
                                             }}
                                         >
-                                            <Plus size={14} /> Add "{recipientInput.trim()}"
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                                <Plus size={14} /> <span>{recipientInput.trim()}</span>
+                                            </div>
+                                            {selectedRecipients.includes(recipientInput.trim()) && <Check size={16} color="var(--accent)" />}
                                         </div>
                                     )}
                                 </motion.div>
