@@ -246,15 +246,31 @@ export function Dashboard() {
                                                         }}
                                                     />
                                                 ) : (
-                                                    <div className="file-message glass" style={{ background: 'rgba(255,255,255,0.05)' }}>
-                                                        <Paperclip size={18} />
-                                                        <div className="file-info">
-                                                            <div className="file-name">{mediaInfo.filename}</div>
-                                                            <div className="file-type">{mediaInfo.mimetype}</div>
+                                                    <div className="file-message glass" style={{
+                                                        background: 'rgba(255,255,255,0.05)',
+                                                        display: 'flex', alignItems: 'center', gap: 12,
+                                                        padding: '12px 14px', borderRadius: 12,
+                                                        width: '250px', // Standard fixed size
+                                                        boxSizing: 'border-box'
+                                                    }}>
+                                                        <div style={{
+                                                            width: 38, height: 38, borderRadius: 10,
+                                                            background: 'rgba(16, 185, 129, 0.15)', color: 'var(--accent)',
+                                                            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+                                                        }}>
+                                                            <Paperclip size={18} />
+                                                        </div>
+                                                        <div className="file-info" style={{ flex: 1, minWidth: 0 }}>
+                                                            <div className="file-name" style={{
+                                                                fontSize: 13, fontWeight: 600,
+                                                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis'
+                                                            }}>
+                                                                {mediaInfo.filename}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 )}
-                                                {body && <div style={{ marginTop: 8 }}>{body}</div>}
+                                                {body && body !== mediaInfo.filename && <div style={{ marginTop: 8 }}>{body}</div>}
                                             </div>
                                         ) : body}
                                         <div className="msg-meta">

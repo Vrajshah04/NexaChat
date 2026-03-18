@@ -238,6 +238,7 @@ function attachClientEvents(newClient, userId) {
 
                     if (isSingleImage) {
                         const media = MessageMedia.fromFilePath(attachments[0].filePath)
+                        if (attachments[0].originalName) media.filename = attachments[0].originalName
                         await sendWithRecovery(() =>
                             newClient.sendMessage(message.from, media, {
                                 caption: rule.responseText || undefined,
@@ -250,6 +251,7 @@ function attachClientEvents(newClient, userId) {
                         for (const att of attachments) {
                             if (!att.filePath) continue
                             const media = MessageMedia.fromFilePath(att.filePath)
+                            if (att.originalName) media.filename = att.originalName
                             await sendWithRecovery(() =>
                                 newClient.sendMessage(message.from, media), userId)
                         }

@@ -162,6 +162,7 @@ app.post('/api/send', authMiddleware, upload.any(), async (req, res) => {
 
 			if (isSingleImage) {
 				const media = MessageMedia.fromFilePath(files[0].path)
+				if (files[0].originalname) media.filename = files[0].originalname
 				await sendWithRecovery(() =>
 					userSession.client.sendMessage(chatId, media, { caption: message || undefined }),
 					userId)
@@ -172,6 +173,7 @@ app.post('/api/send', authMiddleware, upload.any(), async (req, res) => {
 				for (const file of files) {
 					if (!file.path) continue
 					const media = MessageMedia.fromFilePath(file.path)
+					if (file.originalname) media.filename = file.originalname
 					await sendWithRecovery(() => userSession.client.sendMessage(chatId, media), userId)
 					if (files.indexOf(file) < files.length - 1) {
 						await new Promise(r => setTimeout(r, 300))
