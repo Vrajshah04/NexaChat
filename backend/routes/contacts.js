@@ -111,6 +111,61 @@ router.post('/:number/rules', upload.any(), async (req, res) => {
     }
 })
 
+// PUT /api/contacts/:number/rules/:ruleId
+router.put('/:number/rules/:ruleId', upload.any(), async (req, res) => {
+    const cleanNumber = String(req.params.number).replace(/\D/g, '')
+    const chatId = cleanNumber + '@c.us'
+    try {
+        const { trigger, responseText, keptAttachments } = req.body || {}
+
+        const contact = await Contact.findOne({ userId: req.user.userId, chatId }).lean()
+        if (!contact) return res.status(404).json({ ok: false, error: 'Contact not found' })
+
+        const existingRule = (contact.autoReplyRules || []).find(r => String(r._id) === req.params.ruleId)
+        if (!existingRule) return res.status(404).json({ ok: false, error: 'Rule not found' })
+
+        let finalAttachments = existingRule.attachments || []
+        if (keptAttachments !== undefined) {
+            try {
+                const keptPaths = JSON.parse(keptAttachments)
+                finalAttachments = (existingRule.attachments || []).filter(att => keptPaths.includes(att.filePath))
+
+                const removed = (existingRule.attachments || []).filter(att => !keptPaths.includes(att.filePath))
+                for (const att of removed) {
+                    if (att.filePath) fs.promises.unlink(att.filePath).catch(() => { })
+                }
+            } catch (e) {
+                finalAttachments = existingRule.attachments || []
+            }
+
+            const newFiles = (req.files || []).map(f => ({
+                filePath: f.path,
+                originalName: f.originalname || '',
+                mimetype: f.mimetype || 'application/octet-stream',
+            }))
+            finalAttachments = [...finalAttachments, ...newFiles]
+        }
+
+        const updateRule = {}
+        if (trigger !== undefined) updateRule['autoReplyRules.$.trigger'] = trigger.trim()
+        if (responseText !== undefined) updateRule['autoReplyRules.$.responseText'] = responseText.trim()
+        if (keptAttachments !== undefined || (req.files && req.files.length > 0)) {
+            updateRule['autoReplyRules.$.attachments'] = finalAttachments
+        }
+
+        const updatedContact = await Contact.findOneAndUpdate(
+            { userId: req.user.userId, chatId, 'autoReplyRules._id': req.params.ruleId },
+            { $set: updateRule },
+            { new: true }
+        )
+
+        return res.json({ ok: true, contact: updatedContact })
+    } catch (err) {
+        console.error('[contacts] update rule error', err)
+        return res.status(500).json({ ok: false, error: 'Server error' })
+    }
+})
+
 // DELETE /api/contacts/:number/rules/:ruleId
 router.delete('/:number/rules/:ruleId', async (req, res) => {
     const cleanNumber = String(req.params.number).replace(/\D/g, '')

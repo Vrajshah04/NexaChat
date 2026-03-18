@@ -14,7 +14,8 @@ import {
     FileText,
     Film,
     File,
-    Hash
+    Hash,
+    Edit2
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 
@@ -124,6 +125,15 @@ export function Automation() {
             const res = await authFetch(`/api/global-rules/${id}`, { method: 'DELETE' })
             const data = await res.json()
             if (data.ok) setRules(prev => prev.filter(r => r._id !== id))
+        } catch { alert('Network error') }
+    }
+
+    async function handleEdit(id, formData) {
+        try {
+            const res = await authFetch(`/api/global-rules/${id}`, { method: 'PUT', body: formData })
+            const data = await res.json()
+            if (!data.ok) { alert(data.error || 'Failed'); return }
+            setRules(prev => prev.map(r => r._id === id ? data.rule : r))
         } catch { alert('Network error') }
     }
 
@@ -261,7 +271,8 @@ export function Automation() {
                                 {rules.map((r, idx) => (
                                     <GlobalRuleCard key={r._id} rule={r} idx={idx}
                                         onToggle={() => handleToggle(r._id, r.enabled)}
-                                        onDelete={() => handleDelete(r._id)} />
+                                        onDelete={() => handleDelete(r._id)}
+                                        onEdit={(formData) => handleEdit(r._id, formData)} />
                                 ))}
                             </AnimatePresence>
                         </div>
@@ -272,8 +283,18 @@ export function Automation() {
     )
 }
 
-function GlobalRuleCard({ rule, idx, onToggle, onDelete }) {
+function GlobalRuleCard({ rule, idx, onToggle, onDelete, onEdit }) {
+    const [isEditing, setIsEditing] = useState(false)
     const atts = Array.isArray(rule.attachments) ? rule.attachments : []
+
+    if (isEditing) {
+        return (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="glass" style={{ borderRadius: 'var(--radius-lg)', padding: '20px 24px', marginBottom: 12 }}>
+                <EditGlobalRuleForm rule={rule} onSave={(formData) => { onEdit(formData); setIsEditing(false) }} onCancel={() => setIsEditing(false)} />
+            </motion.div>
+        )
+    }
+
     return (
         <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -325,6 +346,10 @@ function GlobalRuleCard({ rule, idx, onToggle, onDelete }) {
                         <Power size={13} />
                         <span>{rule.enabled ? 'On' : 'Off'}</span>
                     </button>
+                    <button onClick={() => setIsEditing(true)}
+                        style={{ width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--text-muted)', opacity: 0.8 }}>
+                        <Edit2 size={14} />
+                    </button>
                     <button onClick={onDelete}
                         style={{ width: 32, height: 32, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid var(--border)', background: 'transparent', cursor: 'pointer', color: 'var(--danger)', opacity: 0.6 }}>
                         <Trash2 size={14} />
@@ -340,5 +365,97 @@ function GlobalRuleCard({ rule, idx, onToggle, onDelete }) {
                 </div>
             )}
         </motion.div>
+    )
+}
+
+function EditGlobalRuleForm({ rule, onSave, onCancel }) {
+    const [trigger, setTrigger] = useState(rule.trigger || '')
+    const [responseText, setResponseText] = useState(rule.responseText || '')
+    const [keptAttachments, setKeptAttachments] = useState(Array.isArray(rule.attachments) ? rule.attachments : [])
+    const [newAttachments, setNewAttachments] = useState([])
+    const fileInputRef = useRef(null)
+
+    function handleFileChange(e) {
+        const files = Array.from(e.target.files || [])
+        setNewAttachments(prev => [...prev, ...files])
+        e.target.value = ''
+    }
+
+    function removeKept(filePath) {
+        setKeptAttachments(prev => prev.filter(a => a.filePath !== filePath))
+    }
+
+    function removeNew(idx) {
+        setNewAttachments(prev => prev.filter((_, i) => i !== idx))
+    }
+
+    function submit(e) {
+        e.preventDefault()
+        if (!trigger.trim()) return
+        if (!responseText.trim() && keptAttachments.length === 0 && newAttachments.length === 0) {
+            alert('Provide at least a reply message or an attachment')
+            return
+        }
+
+        const form = new FormData()
+        form.append('trigger', trigger.trim())
+        if (responseText.trim()) form.append('responseText', responseText.trim())
+        form.append('keptAttachments', JSON.stringify(keptAttachments.map(a => a.filePath)))
+
+        for (const file of newAttachments) {
+            form.append('attachments', file)
+        }
+
+        onSave(form)
+    }
+
+    return (
+        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)' }}>Edit Global Rule</div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>Trigger Keyword</label>
+                    <input value={trigger} onChange={e => setTrigger(e.target.value)} required style={{ width: '100%', padding: '8px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(16, 185, 129, 0.1)', color: 'var(--text)', fontSize: 13 }} />
+                </div>
+                <div>
+                    <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', display: 'block', marginBottom: 4 }}>Reply Message</label>
+                    <input value={responseText} onChange={e => setResponseText(e.target.value)} style={{ width: '100%', padding: '8px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(16, 185, 129, 0.1)', color: 'var(--text)', fontSize: 13 }} />
+                </div>
+            </div>
+
+            <div style={{ borderTop: '1px dashed rgba(255,255,255,0.1)', paddingTop: 12, marginTop: 4 }}>
+                <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent)', textTransform: 'uppercase', display: 'block', marginBottom: 8 }}>Attachments</label>
+
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+                    {keptAttachments.map((att, i) => (
+                        <div key={'k' + i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', fontSize: 11, color: 'var(--text)' }}>
+                            <AttachmentIcon mimetype={att.mimetype} size={12} />
+                            <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.originalName}</span>
+                            <button type="button" onClick={() => removeKept(att.filePath)} style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'flex', padding: 2, marginLeft: 2 }}><X size={12} /></button>
+                        </div>
+                    ))}
+                    {newAttachments.map((f, i) => (
+                        <div key={'n' + i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 20, background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.2)', fontSize: 11, color: 'var(--accent)' }}>
+                            <AttachmentIcon mimetype={f.type} size={12} />
+                            <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                            <button type="button" onClick={() => removeNew(i)} style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'flex', padding: 2, marginLeft: 2 }}><X size={12} /></button>
+                        </div>
+                    ))}
+                </div>
+
+                <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={handleFileChange} />
+                <button type="button" onClick={() => fileInputRef.current?.click()} style={{ width: '100%', padding: '8px', borderRadius: 8, border: '1px dashed rgba(16, 185, 129, 0.3)', background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                    <Paperclip size={13} /> Add Files
+                </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 8 }}>
+                <button type="button" onClick={onCancel} style={{ padding: '8px 16px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 8, color: 'var(--text)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Cancel</button>
+                <button type="submit" style={{ padding: '8px 16px', background: 'var(--accent)', border: 'none', borderRadius: 8, color: '#052e16', cursor: 'pointer', fontSize: 13, fontWeight: 700 }}>Save Changes</button>
+            </div>
+        </form>
     )
 }

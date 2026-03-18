@@ -5,6 +5,7 @@ node_modules/
 backend/.wwebjs_auth/
 backend/.wwebjs_cache/
 backend/npm-debug.log*
+backend/uploads/
 
 # Frontend (Vite build and logs)
 frontend/dist/

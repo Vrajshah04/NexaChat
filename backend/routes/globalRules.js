@@ -64,23 +64,50 @@ router.post('/', upload.any(), async (req, res) => {
     }
 })
 
-// PUT /api/global-rules/:id — mainly for enable/disable toggle
-router.put('/:id', async (req, res) => {
-    const { trigger, responseText, enabled } = req.body || {}
+// PUT /api/global-rules/:id — update text, trigger, toggling, and attachments
+router.put('/:id', upload.any(), async (req, res) => {
     try {
+        const { trigger, responseText, enabled, keptAttachments } = req.body || {}
+
+        const existingRule = await GlobalRule.findOne({ _id: req.params.id, userId: req.user.userId }).lean()
+        if (!existingRule) return res.status(404).json({ ok: false, error: 'Rule not found' })
+
         const update = {}
         if (trigger !== undefined) update.trigger = trigger.trim()
         if (responseText !== undefined) update.responseText = responseText.trim()
-        if (enabled !== undefined) update.enabled = enabled
+        if (enabled !== undefined) update.enabled = enabled === 'true' || enabled === true
+
+        // Only manage attachments if 'keptAttachments' is provided (indicating a full form edit)
+        if (keptAttachments !== undefined) {
+            let finalAttachments = []
+            try {
+                const keptPaths = JSON.parse(keptAttachments)
+                finalAttachments = (existingRule.attachments || []).filter(att => keptPaths.includes(att.filePath))
+
+                const removed = (existingRule.attachments || []).filter(att => !keptPaths.includes(att.filePath))
+                for (const att of removed) {
+                    if (att.filePath) fs.promises.unlink(att.filePath).catch(() => { })
+                }
+            } catch (e) {
+                finalAttachments = existingRule.attachments || []
+            }
+
+            const newFiles = (req.files || []).map(f => ({
+                filePath: f.path,
+                originalName: f.originalname || '',
+                mimetype: f.mimetype || 'application/octet-stream',
+            }))
+            update.attachments = [...finalAttachments, ...newFiles]
+        }
 
         const rule = await GlobalRule.findOneAndUpdate(
             { _id: req.params.id, userId: req.user.userId },
             { $set: update },
             { new: true }
         )
-        if (!rule) return res.status(404).json({ ok: false, error: 'Rule not found' })
         return res.json({ ok: true, rule })
     } catch (err) {
+        console.error('[globalRules] update error', err)
         return res.status(500).json({ ok: false, error: 'Server error' })
     }
 })
